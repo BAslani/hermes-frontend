@@ -266,6 +266,8 @@ export interface Missile {
   target: number | null;
   /** Steers for this launcher instead of a drone. */
   launcher?: number;
+  /** What its burst takes from a launcher it catches (default LAUNCHER.missile). */
+  warhead?: number;
   age: number;
   alive: boolean;
 }
@@ -697,6 +699,7 @@ export function addMissile(
   forward: Vec3,
   target: number | null,
   launcher?: number,
+  warhead?: number,
 ): Missile {
   const missile: Missile = {
     id: game.nextId++,
@@ -704,6 +707,7 @@ export function addMissile(
     velocity: add(carrier, scale(normalize(forward), MISSILE.launchSpeed)),
     target,
     launcher,
+    warhead,
     age: 0,
     alive: true,
   };
@@ -786,6 +790,7 @@ function burst(
   ground: boolean,
   events: StrikeEvent[],
   pads: Vec3[],
+  warhead: number = LAUNCHER.missile,
 ) {
   events.push({ kind: "burst", at, ground });
   for (const t of game.threats)
@@ -794,7 +799,7 @@ function burst(
   let hurt = false;
   pads.forEach((pad, i) => {
     if (game.launchers[i].alive && length(sub(pad, at)) <= LAUNCHER.blast) {
-      damageLauncher(game, i, LAUNCHER.missile, pad, events);
+      damageLauncher(game, i, warhead, pad, events);
       hurt = true;
     }
   });
@@ -997,10 +1002,10 @@ function step(
         ))
     ) {
       m.alive = false;
-      burst(game, m.position, false, events, pads);
+      burst(game, m.position, false, events, pads, m.warhead);
     } else if (m.position[2] < ground(m.position[0], m.position[1])) {
       m.alive = false;
-      burst(game, m.position, true, events, pads);
+      burst(game, m.position, true, events, pads, m.warhead);
     } else if (m.age > MISSILE.life) {
       m.alive = false;
       events.push({ kind: "burst", at: m.position, ground: false });

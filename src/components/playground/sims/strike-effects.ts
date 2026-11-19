@@ -24,7 +24,7 @@ const SMOKE_LIFE = 7;
 /** Pieces flung from a downed drone, and how many of them smoke. */
 const PIECES = 9;
 const SMOKING_PIECES = 3;
-/** Each tracer is drawn as the stretch it flies in this long, s. */
+/** Each tracer is drawn as the stretch it flew in the last this long, s (never back past the muzzle). */
 const TRACER_LENGTH = 0.03;
 
 /** A falling piece of a downed drone. */
@@ -272,8 +272,12 @@ export function createStrikeEffects() {
       for (let i = 0; i < tracers; i++) {
         const r = game.rounds[i];
         tracerOffsets.set(rel(r.position), i * 6);
+        // A round just fired streaks back only to where it left the gun, not
+        // behind the aircraft that fired it.
         tracerOffsets.set(
-          rel(sub(r.position, scale(r.velocity, TRACER_LENGTH))),
+          rel(
+            sub(r.position, scale(r.velocity, Math.min(TRACER_LENGTH, r.age))),
+          ),
           i * 6 + 3,
         );
       }

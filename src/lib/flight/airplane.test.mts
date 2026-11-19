@@ -32,7 +32,15 @@ import {
   wingLift,
 } from "./fixed-wing.ts";
 import { STEP } from "./rigid-body.ts";
-import { DEG, fromAttitude, qaxis, qmul, RAD, toAttitude } from "./vec.ts";
+import {
+  clamp,
+  DEG,
+  fromAttitude,
+  qaxis,
+  qmul,
+  RAD,
+  toAttitude,
+} from "./vec.ts";
 
 const FLAT: Environment = { ground: () => 0, wind: CALM };
 const within = (value: number, lo: number, hi: number, what: string) =>
@@ -292,6 +300,40 @@ test("a banked turn turns the way it banks", () => {
     0,
     2.5,
     "coordinated by the assist, degrees of sideslip",
+  );
+});
+
+test("assist: a pulled stick holds the bank; only the centred stick levels the wings", () => {
+  const banked = () => {
+    const { airplane, trim } = airborneAirplane([0, 0, 1000], 0, 55);
+    const base = { ...NEUTRAL_CONTROLS, throttle: trim.throttle };
+    // Roll left to about 30° and stop the roll.
+    run(airplane, 6, () => {
+      const { roll } = toAttitude(airplane.body.orientation);
+      return assist(
+        { ...base, roll: clamp(0.03 * (-30 - roll), -0.5, 0.5) },
+        airplane,
+      );
+    });
+    return { airplane, base };
+  };
+  // Ailerons centred, stick pulled back: the turn goes on.
+  const pulled = banked();
+  run(pulled.airplane, 4, () =>
+    assist({ ...pulled.base, roll: 0, pitch: 0.3 }, pulled.airplane),
+  );
+  const pulledRoll = toAttitude(pulled.airplane.body.orientation).roll;
+  assert.ok(
+    pulledRoll < -20,
+    `bank held while pulling (${pulledRoll.toFixed(0)}°)`,
+  );
+  // Stick at the centre point: the wings come level.
+  const centred = banked();
+  run(centred.airplane, 8, () => assist({ ...centred.base }, centred.airplane));
+  const centredRoll = toAttitude(centred.airplane.body.orientation).roll;
+  assert.ok(
+    Math.abs(centredRoll) < 10,
+    `levelled (${centredRoll.toFixed(0)}°)`,
   );
 });
 

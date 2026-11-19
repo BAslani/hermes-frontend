@@ -76,8 +76,10 @@ import { findRunway, lineUp, type RunwayLine } from "@/lib/flight/runway";
 import {
   addMissile,
   addRound,
+  DECOY_REVEAL,
   FIRE_INTERVAL,
   GUN,
+  LAUNCHER,
   LOCK,
   type Lock,
   launcherPosition,
@@ -196,8 +198,11 @@ const JET_NOZZLES: Vec3[] = [
 /** Seconds a gate burst lasts. */
 const BURST_TIME = 0.7;
 const STRIKE_LAYER = "flight-strike";
-/** The F-14 locks on to a launcher this far away, metres. */
+/** The F-14 locks on to a launcher or a drone this far away, metres. */
 const JET_LOCK_RANGE = 9000;
+/** Lock ids for launchers are below zero (−1 for launcher 0), so they never meet a drone's id. */
+const launcherLockId = (index: number) => -1 - index;
+const lockedLauncher = (id: number) => -1 - id;
 /** Where its missiles leave and its gun fires from, body frame (forward, left, up). */
 const JET_PYLON: Vec3 = [1, 0, -1.4];
 const JET_GUN: Vec3 = [7.5, 0.7, 0];
@@ -416,11 +421,14 @@ export function createAirplaneSim(
         m.lock,
         toGame(lastCamera.position),
         lastCamera.forward,
-        game.launchers.map((l, i) => ({
-          id: i,
-          position: launcherPosition(game, i, strikeGround),
-          alive: l.alive,
-        })),
+        [
+          ...game.launchers.map((l, i) => ({
+            id: launcherLockId(i),
+            position: launcherPosition(game, i, strikeGround),
+            alive: l.alive,
+          })),
+          ...game.threats,
+        ],
         dt,
         strikeGround,
         JET_LOCK_RANGE,
@@ -441,13 +449,17 @@ export function createAirplaneSim(
     if (wantFire) {
       wantFire = false;
       if (m.missiles > 0 && m.cooldown <= 0) {
+        // Locked on a launcher, it steers for that; on a drone, for the drone.
+        // Its warhead destroys a launcher in one burst (the drone's takes two).
+        const target = m.lock.locked ? m.lock.target : null;
         addMissile(
           game,
           at(JET_PYLON),
           body.velocity,
           nose,
-          null,
-          m.lock.locked && m.lock.target !== null ? m.lock.target : undefined,
+          target !== null && target >= 0 ? target : null,
+          target !== null && target < 0 ? lockedLauncher(target) : undefined,
+          LAUNCHER.health,
         );
         m.missiles -= 1;
         m.cooldown = FIRE_INTERVAL;
@@ -498,7 +510,11 @@ export function createAirplaneSim(
           y: p.y,
           distance: p.distance,
           state:
-            lock.target === i ? (lock.locked ? "locked" : "locking") : "none",
+            lock.target === launcherLockId(i)
+              ? lock.locked
+                ? "locked"
+                : "locking"
+              : "none",
           tag: "launcher",
         });
     });
@@ -512,8 +528,21 @@ export function createAirplaneSim(
           x: p.x,
           y: p.y,
           distance: p.distance,
-          state: "none",
-          tag: null,
+          state:
+            lock.target === t.id
+              ? lock.locked
+                ? "locked"
+                : "locking"
+              : "none",
+          // What each drone is shows on its box; decoys only once they are close.
+          tag:
+            t.kind === "jet"
+              ? "jet"
+              : t.kind === "hunter"
+                ? "hunter"
+                : t.kind === "decoy" && p.distance < DECOY_REVEAL
+                  ? "decoy"
+                  : null,
         });
     }
     const arrow = nearest as ReturnType<typeof screenPoint> | null;

@@ -173,10 +173,11 @@ export const STRIKES: StrikeScenario[] = [
       [51.045, 35.913],
       [51.0226, 35.985],
     ],
-    // 12 km south of the dam at 1500 m, heading north up the Karaj valley. Two
-    // missiles or about fifty rounds destroy a launcher: eight missiles and the
-    // M61's 675 rounds. Alone, nobody stops the drones already up, so the dam
-    // takes twelve hits instead of four.
+    // 12 km south of the dam at 1500 m, heading north up the Karaj valley. One
+    // of its missiles (or about fifty rounds) destroys a launcher, and it can
+    // lock on to drones too: eight missiles and the M61's 675 rounds. Alone,
+    // nobody else stops the drones already up, so the dam takes twelve hits
+    // instead of four.
     jet: {
       start: { position: [51.0907, 35.8483], heading: 0, height: 1500 },
       missiles: 8,

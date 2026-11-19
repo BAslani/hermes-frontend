@@ -761,7 +761,10 @@ export function assist(
     -1,
     1,
   );
-  const centred = Math.abs(controls.roll) < 0.02;
+  // Wings levelled only with the stick at the centre point: a stick pulled
+  // back with no roll is a banked turn being flown, not a request to level.
+  const centred =
+    Math.abs(controls.roll) < 0.02 && Math.abs(controls.pitch) < 0.02;
   const levelling = centred
     ? fade * clamp(-0.012 * roll - 0.25 * plane.body.omega[0], -0.35, 0.35)
     : 0;

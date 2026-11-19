@@ -621,3 +621,20 @@ test("launcher: the game is won once every launcher is down and its drones are g
   assert.equal(game.wave, 0);
   assert.ok(!kinds.includes("wave"));
 });
+
+test("launcher: one heavy-warhead missile (the F-14's) destroys it; the default takes half", () => {
+  const flyOne = (warhead?: number) => {
+    const game = newStrike(launcherSpec());
+    const pad = launcherPosition(game, 0, flat);
+    const from: [number, number, number] = [pad[0] - 3000, 0, 600];
+    addMissile(game, from, [200, 0, -40], sub(pad, from), null, 0, warhead);
+    for (let t = 0; t < 20 && game.missiles.length; t += 0.05)
+      stepStrike(game, flat, 0.05);
+    return game.launchers[0];
+  };
+  const heavy = flyOne(LAUNCHER.health);
+  assert.equal(heavy.alive, false);
+  const standard = flyOne();
+  assert.equal(standard.alive, true);
+  assert.equal(standard.health, LAUNCHER.health - LAUNCHER.missile);
+});

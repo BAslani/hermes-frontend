@@ -108,12 +108,12 @@ export const en = {
     jetStrike: {
       title: "Strike missions",
       intro:
-        "Fly the F-14 against the drone launchers before their drones destroy the target. Hold a launcher in the circle to lock on.",
+        "Fly the F-14 against the drone launchers before their drones destroy the target. Hold a launcher or a drone in the circle to lock on: one missile destroys either.",
       brief:
         "Destroy {n} drone launchers before their drones destroy {site}. Flown in the F-14.",
       gettingReady: "Getting {mission} ready",
       controls: {
-        fire: "Fire a missile at the locked launcher",
+        fire: "Fire a missile at the locked launcher or drone",
         gun: "Gun (hold)",
       },
     },
