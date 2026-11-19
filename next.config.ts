@@ -1,9 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
+  // Self-contained server bundle, as map-witel deploys it.
+  output: "standalone",
+  poweredByHeader: false,
+  // Development only: /sat imagery tiles allow just the 141.ir origin, so the
+  // dev server proxies them to stay same-origin. In production, off map.141.ir,
+  // src/lib/imagery.ts falls back to imagery rendered by tileserver-gl.
+  async rewrites() {
+    if (process.env.NODE_ENV !== "development") return [];
+    const tileServer =
+      process.env.NEXT_PUBLIC_TILE_SERVER_URL ?? "https://map.141.ir";
+    return [{ source: "/sat/:path*", destination: `${tileServer}/sat/:path*` }];
+  },
   turbopack: {
     rules: {
       "*.css": {

@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# maplibre worker, copied by scripts/copy-maplibre-worker.mjs
+/public/vendor/
+# level-design and flight render output
+/video/renders/
+/scripts/courses/
+/scripts/missions/
+/scripts/strikes/

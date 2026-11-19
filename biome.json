@@ -35,5 +35,41 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "src/components/playground/**",
+        "src/lib/**",
+        "src/config/**",
+        "scripts/**"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off",
+            "useTemplate": "off"
+          },
+          "suspicious": {
+            "useIterableCallbackReturn": "off",
+            "noArrayIndexKey": "off"
+          },
+          "correctness": {
+            "useExhaustiveDependencies": "off",
+            "noUnusedFunctionParameters": "off",
+            "noUnusedPrivateClassMembers": "off"
+          },
+          "complexity": {
+            "useOptionalChain": "off"
+          },
+          "a11y": {
+            "useSemanticElements": "off",
+            "useAriaPropsSupportedByRole": "off",
+            "noSvgWithoutTitle": "off",
+            "noAutofocus": "off"
+          }
+        }
+      }
+    }
+  ]
 }

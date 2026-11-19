@@ -1,36 +1,36 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Hermes
 
-## Getting Started
+Flight games over 141 satellite imagery and 3D terrain of Iran, split out of
+map-witel's playground. English only.
 
-First, run the development server:
+- `/` – game picker
+- `/play/drone` – drone free flight (also kept in map-witel)
+- `/play/strike` – drone defence
+- `/play/helicopter` – rescue helicopter missions
+- `/play/airplane` – trainer / jet, air races
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Develop
+
+```sh
+pnpm install
+pnpm dev                 # copies the MapLibre worker, proxies /sat to the tile server
+pnpm typecheck && pnpm test && pnpm lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`NEXT_PUBLIC_TILE_SERVER_URL` (see `.env.example`) picks the tile server,
+default `https://map.141.ir`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Imagery off map.141.ir
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Raw `/sat` tiles only allow the 141.ir origin. In dev, `next.config.ts`
+proxies them. In production on any other origin, `src/lib/imagery.ts` falls
+back to tileserver-gl's rendered satellite tiles (lower quality, with labels).
+For full imagery, serve Hermes from a 141.ir origin or proxy `/sat` there too.
 
-## Learn More
+## Scripts
 
-To learn more about Next.js, take a look at the following resources:
+- `pnpm capture-previews` – landing card images from the running dev server
+- `node scripts/design-courses.mts` / `design-missions.mts` / `design-strikes.mts` – level design renders
+- `pnpm render-flight`, `node scripts/jet-takeoff-diag.mts` – flight renders and diagnostics
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`maplibre-gl` is pinned exactly: the sims reach into `map._camera`, a private API.
