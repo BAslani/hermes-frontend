@@ -44,6 +44,7 @@ import {
   toLngLat,
   toLocal,
 } from "@/lib/flight/frame";
+import { type Partner, standInDrone } from "@/lib/flight/partner";
 import {
   controlsFrom,
   type HeldKeys,
@@ -148,6 +149,8 @@ interface JetStrike {
   /** Ground over the whole battle area, sampled while it was all in view. */
   grid: (east: number, north: number) => number;
   lock: Lock;
+  /** The interceptor drone in co-op (a stand-in for now). */
+  partner: Partner | null;
   missiles: number;
   rounds: number;
   cooldown: number;
@@ -477,6 +480,8 @@ export function createAirplaneSim(
   ) => {
     const { game, lock } = m;
     const cameraGame = sub(camera.position, siteOffset(m));
+    const rel = (p: Vec3) => sub(p, cameraGame);
+    const ally = m.partner?.state() ?? null;
     const fov = map.getVerticalFieldOfView();
     strikeLayer.show({
       eye,
@@ -484,13 +489,16 @@ export function createAirplaneSim(
       pixelsPerMeter,
       light: LOOKS[m.scenario.look].light,
       ...fx.view(game, cameraGame, strikeGround),
+      partner: ally && {
+        offset: rel(ally.position),
+        forward: rotate(ally.orientation, [1, 0, 0]),
+      },
       thermal: false,
       navLights: m.scenario.look === "night",
       time: game.time,
     });
     const canvas = map.getCanvas();
     const aspect = canvas.width / canvas.height;
-    const rel = (p: Vec3) => sub(p, cameraGame);
     const playing = game.phase === "wave" || game.phase === "break";
     const boxes: StrikeFrame["boxes"] = [];
     // Launchers first (the targets), then the drones in the air.
@@ -543,6 +551,18 @@ export function createAirplaneSim(
                 : t.kind === "decoy" && p.distance < DECOY_REVEAL
                   ? "decoy"
                   : null,
+        });
+    }
+    // The partner's box, so it can be found (and not shot at).
+    if (ally && boxes.length < MAX_BOXES) {
+      const p = screenPoint(eye, rel(ally.position), fov, aspect);
+      if (p.visible)
+        boxes.push({
+          x: p.x,
+          y: p.y,
+          distance: p.distance,
+          state: "none",
+          tag: "ally",
         });
     }
     const arrow = nearest as ReturnType<typeof screenPoint> | null;
@@ -964,12 +984,23 @@ export function createAirplaneSim(
       );
       fx.clear();
       wantFire = false;
+      // Co-op: the partner's interceptor hovers where drone defence starts it.
+      const [startEast, startNorth] = toLocal(site, scenario.start.position);
+      const startGround =
+        map.queryTerrainElevation(scenario.start.position) ??
+        grid(startEast, startNorth);
       const m: JetStrike = {
         scenario,
         jet,
         game,
         grid,
         lock: newLock(),
+        partner: settings.partner
+          ? standInDrone(
+              [startEast, startNorth, startGround + scenario.start.height],
+              scenario.start.heading,
+            )
+          : null,
         missiles: jet.missiles,
         rounds: jet.rounds,
         cooldown: 0,
@@ -1172,8 +1203,18 @@ export function createAirplaneSim(
             env,
             h,
           );
-          if (mission && !current.crashed)
-            strikeEvents.push(...stepStrike(mission.game, strikeGround, h));
+          if (mission && !current.crashed) {
+            // Hunters go for the partner's interceptor; without one, for the site.
+            mission.partner?.step(h);
+            strikeEvents.push(
+              ...stepStrike(
+                mission.game,
+                strikeGround,
+                h,
+                mission.partner?.state().position,
+              ),
+            );
+          }
           if (active && !current.crashed) {
             onRaceEvents(
               stepRace(

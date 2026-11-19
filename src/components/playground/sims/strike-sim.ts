@@ -10,6 +10,7 @@ import {
 } from "@/lib/drone-controls";
 import { eyeMatrix } from "@/lib/flight/camera";
 import { type LngLat, toLngLat, toLocal } from "@/lib/flight/frame";
+import { type Partner, standInJet } from "@/lib/flight/partner";
 import { screenPoint } from "@/lib/flight/race";
 import {
   DECOY_REVEAL,
@@ -44,8 +45,9 @@ import {
 } from "../StrikeHud";
 import type { FlightSettings } from "../settings";
 import { loadStrikeRecord, saveStrikeRecord } from "../strike-records";
+import { createAircraftLayer } from "../three/aircraft-layer";
 import { createStrikeLayer } from "../three/strike-layer";
-import { applyLook } from "../time-of-day";
+import { applyLook, LOOKS } from "../time-of-day";
 import { FLIGHT_KEYS, readInput } from "./drone-sim";
 import { droneOptics } from "./optics";
 import { createStrikeEffects } from "./strike-effects";
@@ -57,6 +59,8 @@ export interface StrikeSim extends Sim {
 }
 
 const LAYER = "flight-strike";
+/** The co-op partner's F-14, drawn by the airplane game's aircraft layer. */
+const PARTNER_LAYER = "flight-partner";
 /** The interceptor's cruise speed limit, m/s (boost triples it). */
 const COMBAT_SPEED = 45;
 /** It may look this far up: drones come over the ridges. Map pitch, degrees (90 = horizon). */
@@ -152,6 +156,10 @@ export function createStrikeSim(
   map.setMaxZoom(25);
   map.setMaxPitch(180);
   map.addLayer(layer.layer);
+  const partnerLayer = createAircraftLayer(PARTNER_LAYER);
+  map.addLayer(partnerLayer.layer);
+  /** The F-14 in a co-op launch-site mission (a stand-in for now). */
+  let partner: Partner | null = null;
 
   let scenario = deps.scenario;
   let origin: LngLat = scenario.site.position;
@@ -237,6 +245,10 @@ export function createStrikeSim(
     });
     lastGround = startGround;
     game = newStrike(spec(s), Math.floor(Math.random() * 1e9));
+    partner =
+      deps.settings().partner && s.jet
+        ? standInJet(game.spec.site, ground)
+        : null;
     lock = newLock();
     fx.clear();
     shakeUntil = -1;
@@ -441,6 +453,24 @@ export function createStrikeSim(
       navLights: scenario.look === "night",
       time: game.time,
     });
+    const ally = partner?.state() ?? null;
+    partnerLayer.show(
+      ally && {
+        eye,
+        offset: rel(ally.position),
+        orientation: ally.orientation,
+        fov: map.getVerticalFieldOfView(),
+        cockpit: false,
+        surfaces: { elevator: 0, aileron: 0, rudder: 0 },
+        flaps: 0,
+        rpm: 0.85,
+        dt: 0,
+        pixelsPerMeter: scaleZ,
+        model: "jet",
+        gearDown: 0,
+        light: LOOKS[scenario.look].light,
+      },
+    );
     map.triggerRepaint();
 
     // The HUD: a box on every drone in view, an arrow to the one nearest the site.
@@ -499,6 +529,18 @@ export function createStrikeSim(
           t.id === lock.target ? (lock.locked ? "locked" : "locking") : "none",
         tag,
       });
+    }
+    // The partner's box, so it can be found (and not shot at).
+    if (ally && boxes.length < MAX_BOXES) {
+      const p = screenPoint(eye, rel(ally.position), fov, aspect);
+      if (p.visible)
+        boxes.push({
+          x: p.x,
+          y: p.y,
+          distance: p.distance,
+          state: "none",
+          tag: "ally",
+        });
     }
     if (
       playing &&
@@ -623,6 +665,7 @@ export function createStrikeSim(
       const camera = cameraLocal(drone);
       const forward = forwardOf(drone);
       const events = stepStrike(game, ground, dt, camera);
+      partner?.step(dt);
       fx.step(dt, game.time, ground);
       const wasLocked = lock.locked;
       stepLock(lock, camera, forward, game.threats, dt, ground);
@@ -740,6 +783,7 @@ export function createStrikeSim(
       restoreLook?.();
       try {
         if (map.getLayer(LAYER)) map.removeLayer(LAYER);
+        if (map.getLayer(PARTNER_LAYER)) map.removeLayer(PARTNER_LAYER);
         transform().clearNearFarZOverride();
         map.setCenterClampedToGround(true);
         map.setMaxPitch(maxPitch);

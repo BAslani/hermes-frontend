@@ -12,6 +12,8 @@ export interface FlightSettings {
   windKnots: number;
   /** What free flight is flown in (races always use the race plane). */
   aircraft: "trainer" | "jet";
+  /** Co-op launcher missions: a stand-in partner flies the other aircraft. */
+  partner: boolean;
 }
 
 export const DEFAULT_SETTINGS: FlightSettings = {
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: FlightSettings = {
   windFrom: 270,
   windKnots: 0,
   aircraft: "trainer",
+  partner: false,
 };
 
 const KEY = "141-playground-settings";
@@ -51,6 +54,7 @@ function loadSettings(): FlightSettings {
         MAX_WIND_KNOTS,
       ),
       aircraft: stored.aircraft === "jet" ? "jet" : "trainer",
+      partner: bool(stored.partner, DEFAULT_SETTINGS.partner),
     };
   } catch {
     return DEFAULT_SETTINGS;

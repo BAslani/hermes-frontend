@@ -137,8 +137,13 @@ export function PlaygroundCard({
       ["selfCentring", t.settings.selfCentring],
       ["metric", t.settings.metric],
       ["sound", t.settings.sound],
+      ["partner", t.settings.partner],
     ] as const
-  ).filter(([key]) => vehicle !== "strike" || key === "sound");
+  ).filter(([key]) =>
+    vehicle === "strike"
+      ? key === "sound" || key === "partner"
+      : key !== "partner" || vehicle === "airplane",
+  );
   const freeFlight = vehicle === "drone" || vehicle === "strike";
   const number = new Intl.NumberFormat("en-US");
 

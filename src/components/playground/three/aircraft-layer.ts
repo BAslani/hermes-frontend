@@ -687,6 +687,8 @@ export function createAircraftLayer(id: string): AircraftLayer {
       }
       aircraftCamera.fov = current.fov;
       aircraftCamera.aspect = canvas.width / canvas.height;
+      // Far enough for an aircraft some way off (a co-op partner), not just one's own.
+      aircraftCamera.far = Math.max(4000, Math.hypot(...offset) * 1.5);
       aircraftCamera.updateProjectionMatrix();
       place(
         model.root,

@@ -58,7 +58,7 @@ export interface StrikeFrame {
     y: number;
     distance: number;
     state: "locked" | "locking" | "none";
-    tag: "jet" | "hunter" | "decoy" | "launcher" | null;
+    tag: "jet" | "hunter" | "decoy" | "launcher" | "ally" | null;
   }[];
   /** The drone nearest the site, when it is off screen: which way, and how far from the player. */
   arrow: { angle: number; distance: number } | null;
@@ -359,7 +359,7 @@ export function StrikeHud({
                 {Array.from({ length: status.hitsAllowed }, (_, i) => (
                   <span
                     key={i}
-                    className={`h-2.5 w-4 rounded-sm ${i < status.hitsLeft ? "bg-accent-bright" : "bg-red-500/40"}`}
+                    className={`h-2.5 rounded-sm ${status.hitsAllowed > 6 ? "w-2" : "w-4"} ${i < status.hitsLeft ? "bg-accent-bright" : "bg-red-500/40"}`}
                   />
                 ))}
               </div>
@@ -415,7 +415,7 @@ export function StrikeHud({
               ref={(el) => {
                 boxRefs.current[i] = el;
               }}
-              className="absolute hidden -translate-x-1/2 -translate-y-1/2 border-2 border-white/60 data-[tag=decoy]:border-dashed data-[tag=decoy]:border-white/35 data-[tag=hunter]:border-sky-300 data-[tag=launcher]:border-[#ff8a2a] data-[state=locked]:border-red-500 data-[state=locking]:border-[#ffb547]"
+              className="absolute hidden -translate-x-1/2 -translate-y-1/2 border-2 border-white/60 data-[tag=decoy]:border-dashed data-[tag=decoy]:border-white/35 data-[tag=hunter]:border-sky-300 data-[tag=launcher]:border-[#ff8a2a] data-[tag=ally]:rounded-full data-[tag=ally]:border-accent-bright data-[state=locked]:border-red-500 data-[state=locking]:border-[#ffb547]"
             >
               <span
                 dir="ltr"
@@ -459,7 +459,10 @@ export function StrikeHud({
 
       {/* Missiles and the seeker's state, bottom centre. */}
       {playing && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-28 z-10 flex flex-col items-center gap-2 px-4">
+        // Above the instrument panel when flown from the F-14 (the launchers row is its sign).
+        <div
+          className={`pointer-events-none absolute inset-x-0 z-10 flex flex-col items-center gap-2 px-4 ${status.launchers ? "bottom-48" : "bottom-28"}`}
+        >
           <div
             ref={hunterRef}
             className="hidden rounded-full bg-sky-500/85 px-4 py-1 text-sm font-bold text-white"

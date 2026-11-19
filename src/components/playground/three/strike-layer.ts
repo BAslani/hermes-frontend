@@ -54,6 +54,8 @@ export interface StrikeView {
   site: { offset: Vec3; radius: number; health: number } | null;
   /** Drone launchers on the ground, camera-relative, each facing the way its drones leave. */
   launchers: { offset: Vec3; forward: Vec3 }[];
+  /** The co-op partner's interceptor drone, seen from the F-14. */
+  partner?: { offset: Vec3; forward: Vec3 } | null;
 }
 
 export interface StrikeLayer {
@@ -317,6 +319,24 @@ export function createStrikeLayer(id: string): StrikeLayer {
   const quadParts = quadGeometry();
   const jets = pool(jetParts, MAX_SPECIAL, 0);
   const quads = pool(quadParts, MAX_SPECIAL, 4);
+  // The partner's interceptor: the quadcopter model, light grey so it is not taken for a hunter.
+  const allyMaterial = new THREE.MeshStandardMaterial({
+    color: 0xd8dde2,
+    roughness: 0.6,
+    side: THREE.DoubleSide,
+  });
+  const ally = new THREE.Group();
+  quadParts.forEach((g, i) =>
+    ally.add(
+      new THREE.Mesh(
+        g,
+        i >= quadParts.length - 4 ? propMaterial : allyMaterial,
+      ),
+    ),
+  );
+  ally.matrixAutoUpdate = false;
+  ally.visible = false;
+  scene.add(ally);
   // Debris: small dark specks a couple of pixels across.
   const debrisGeometry = new THREE.BufferGeometry();
   const debrisPositions = new THREE.BufferAttribute(
@@ -544,6 +564,7 @@ export function createStrikeLayer(id: string): StrikeLayer {
         siteMaterial,
         beamMaterial,
         launcherMaterial,
+        allyMaterial,
         launcherBeamMaterial,
       ])
         m.dispose();
@@ -649,6 +670,9 @@ export function createStrikeLayer(id: string): StrikeLayer {
         place(siteRing, eye, [r, 0, 0], [0, r, 0], [0, 0, 1], site.offset);
         place(beam, eye, [3, 0, 0], [0, 0, 600], [0, -3, 0], site.offset);
       }
+      ally.visible = Boolean(current.partner);
+      if (current.partner)
+        placeAlong(ally, eye, current.partner.forward, current.partner.offset);
       launcherPool.forEach(({ truck, beam }, i) => {
         const l = current.launchers[i];
         truck.visible = beam.visible = Boolean(l);

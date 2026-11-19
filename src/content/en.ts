@@ -236,7 +236,13 @@ export const en = {
       damage: "Interceptor hit! {n} left",
       decoyDown: "Decoy: no points",
       hunterWarning: "Hunter drone {d} away!",
-      tags: { jet: "JET", hunter: "HNT", decoy: "DCY", launcher: "LNCH" },
+      tags: {
+        jet: "JET",
+        hunter: "HNT",
+        decoy: "DCY",
+        launcher: "LNCH",
+        ally: "ALLY",
+      },
       launchers: "Launchers",
       launcherDown: "Launcher destroyed! {n} left",
       lastLauncher: "Last launcher destroyed!",
@@ -264,6 +270,8 @@ export const en = {
       title: "Settings",
       assists: "Assists: automatic rudder and wing levelling",
       selfCentring: "Yoke springs back to centre",
+      partner:
+        "Co-op: a stand-in partner flies the other aircraft (launch-site missions)",
       metric: "Metric units (km/h, m, m/s)",
       sound: "Sound",
       wind: "Wind",
