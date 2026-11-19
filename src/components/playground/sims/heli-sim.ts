@@ -95,7 +95,7 @@ import {
 import { HELI_EYE } from "../three/heli-model";
 import { stormLook } from "../time-of-day";
 import { PLACE_KEYS } from "./drone-sim";
-import { Journeys, type Sim, type SimHost } from "./types";
+import { Journeys, type Sim, type SimHost, setNearFar } from "./types";
 
 export interface HeliSim extends Sim {
   /** Stand on the ground at an airfield. */
@@ -150,8 +150,6 @@ const LAYER = "flight-helicopter";
 const USED_KEYS = new Set(["KeyW", "KeyS", "KeyA", "KeyD", "KeyC", "KeyR"]);
 /** Above this the skids cannot reach the ground: one elevation sample per step is enough. */
 const CONTACT_HEIGHT = 30;
-/** MapLibre's near plane is brought in to at most this, metres. */
-const MAX_NEAR = 20;
 /** Jumping to a place this high starts in a hover rather than on the ground, metres. */
 const HOVER_ABOVE = 1200;
 
@@ -734,10 +732,7 @@ export function createHeliSim(
       camera.position[2] - ground(camera.position[0], camera.position[1]),
     );
     const scale = transform().pixelsPerMeter;
-    transform().overrideNearFarZ(
-      clamp(height * 0.25, 0.4, MAX_NEAR) * scale,
-      clamp(4500 * Math.sqrt(Math.max(height, 4)), 30_000, 350_000) * scale,
-    );
+    setNearFar(map, height);
 
     const eye = eyeMatrix(angles);
     let world: WorldView | undefined;

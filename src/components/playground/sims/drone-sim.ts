@@ -206,12 +206,19 @@ export function createDroneSim(
       drone = state;
       lastGround = state.ground;
       dirty = false;
+      // From here the camera goes exactly where the drone is. Clamped, MapLibre
+      // would move it with the ground under the view centre: the camera bobs
+      // over ridges and lurches when looking above the horizon.
+      map.setCenterClampedToGround(false);
       map.jumpTo(cameraFor(state));
     };
 
     journeys.start({
       // First look: the saved view, straight down at a place, or the known state itself.
       look() {
+        // Clamped while loading, so a view's centre sits on the real ground and
+        // fromView() reads the right elevation.
+        map.setCenterClampedToGround(true);
         if ("state" in to) place();
         else if (view) map.jumpTo(view);
         else
@@ -351,6 +358,7 @@ export function createDroneSim(
 
     dispose() {
       journeys.cancel();
+      map.setCenterClampedToGround(true);
       hud.set(null);
       host.setTravelling(null);
     },

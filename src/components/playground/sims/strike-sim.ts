@@ -65,7 +65,7 @@ import {
 import { applyLook } from "../time-of-day";
 import { FLIGHT_KEYS, readInput } from "./drone-sim";
 import { droneOptics } from "./optics";
-import { Journeys, type Sim, type SimHost } from "./types";
+import { Journeys, type Sim, type SimHost, setNearFar } from "./types";
 
 export interface StrikeSim extends Sim {
   /** Start (or restart) a drone-defence scenario. */
@@ -79,8 +79,6 @@ const COMBAT_SPEED = 45;
 const MAX_LOOK_PITCH = 125;
 /** Degrees per pixel of mouse movement. */
 const MOUSE_SENSITIVITY = 0.12;
-/** MapLibre's near plane is brought in to at most this, metres. */
-const MAX_NEAR = 20;
 /** Spacing of the elevation grid sampled at the start, metres. */
 const GRID_STEP = 120;
 const HUD_INTERVAL_MS = 100;
@@ -641,10 +639,7 @@ export function createStrikeSim(
     const camera = cameraLocal(state);
     const height = Math.max(0, camera[2] - ground(camera[0], camera[1]));
     const scaleZ = transform().pixelsPerMeter;
-    transform().overrideNearFarZ(
-      clamp(height * 0.25, 0.4, MAX_NEAR) * scaleZ,
-      clamp(4500 * Math.sqrt(Math.max(height, 4)), 30_000, 350_000) * scaleZ,
-    );
+    setNearFar(map, height);
 
     const eye = eyeMatrix(angles(state));
     effects(camera);

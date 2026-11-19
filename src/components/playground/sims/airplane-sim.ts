@@ -89,7 +89,7 @@ import { JET_EYE } from "../three/jet-model";
 import { RACER_EYE } from "../three/racer-model";
 import { applyLook, LOOKS } from "../time-of-day";
 import { PLACE_KEYS } from "./drone-sim";
-import { Journeys, type Sim, type SimHost } from "./types";
+import { Journeys, type Sim, type SimHost, setNearFar } from "./types";
 
 export interface AirplaneSim extends Sim {
   /** Line up on the runway at an airport. */
@@ -140,8 +140,6 @@ const JET_NOZZLES: Vec3[] = [
 ];
 /** Seconds a gate burst lasts. */
 const BURST_TIME = 0.7;
-/** MapLibre's near plane is brought in to at most this, metres, so a gate or ghost close by is not cut away. */
-const MAX_NEAR = 20;
 
 /** The light airplane: fixed-step physics, cameras, runway starts, instruments and sound. */
 export function createAirplaneSim(
@@ -370,10 +368,7 @@ export function createAirplaneSim(
       camera.position[2] - ground(camera.position[0], camera.position[1]),
     );
     const scale = transform().pixelsPerMeter;
-    transform().overrideNearFarZ(
-      clamp(height * 0.25, 0.4, MAX_NEAR) * scale,
-      clamp(4500 * Math.sqrt(Math.max(height, 4)), 30_000, 350_000) * scale,
-    );
+    setNearFar(map, height);
 
     const eye = eyeMatrix(angles);
     const now = performance.now() / 1000;

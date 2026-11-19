@@ -121,3 +121,32 @@ export class Journeys {
     window.clearTimeout(this.timer);
   }
 }
+
+/** MapLibre's near plane is brought in to at most this, metres, so a gate or aircraft close by is not cut away. */
+const MAX_NEAR = 20;
+/** MapLibre's pitch limit for its sea-level distance (maxMercatorHorizonAngle). */
+const FOG_PITCH_LIMIT = 89.25;
+
+/**
+ * Near and far planes for a camera `height` metres above the ground: a close
+ * near plane when low, and a far plane that grows with height.
+ *
+ * MapLibre fades terrain into fog from the camera's "sea level" distance out
+ * to the far plane. Looking level or above it, from high ground, that distance
+ * is beyond our far plane; the fog then runs backwards and paints all the land
+ * white. So the far plane never ends before the fog starts.
+ */
+export function setNearFar(map: MapLibreMap, height: number) {
+  const t = map._camera.transform;
+  const scale = t.pixelsPerMeter;
+  const pitch = (Math.min(t.pitch, FOG_PITCH_LIMIT) * Math.PI) / 180;
+  const fogStart = Math.max(
+    t.cameraToCenterDistance / 2,
+    t.cameraToCenterDistance + (t.elevation * scale) / Math.cos(pitch),
+  );
+  const near = Math.min(Math.max(height * 0.25, 0.4), MAX_NEAR) * scale;
+  const far =
+    Math.min(Math.max(4500 * Math.sqrt(Math.max(height, 4)), 30_000), 350_000) *
+    scale;
+  t.overrideNearFarZ(near, Math.max(far, fogStart * 1.05));
+}

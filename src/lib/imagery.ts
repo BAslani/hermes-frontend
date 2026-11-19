@@ -160,7 +160,7 @@ export function streetsOverlay(visible: boolean): LayerSpecification[] {
       layout: {
         visibility,
         "symbol-placement": "line",
-        "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+        "text-field": ["coalesce", ["get", "name:fa"], ["get", "name"]],
         "text-font": ["Ravi Regular"],
         "text-size": 12,
       },
@@ -177,7 +177,7 @@ export function streetsOverlay(visible: boolean): LayerSpecification[] {
       "source-layer": "place",
       layout: {
         visibility,
-        "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+        "text-field": ["coalesce", ["get", "name:fa"], ["get", "name"]],
         "text-font": ["Ravi Black"],
         "text-size": ["interpolate", ["linear"], ["zoom"], 6, 11, 14, 17],
       },
