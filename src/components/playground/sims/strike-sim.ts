@@ -1,5 +1,7 @@
 import type { TerrainSpecification } from "maplibre-gl";
 import type { StrikeScenario } from "@/config/strikes";
+import type { CoopSession } from "@/lib/coop/client";
+import { coast } from "@/lib/coop/match";
 import {
   createDrone,
   DRONE,
@@ -14,6 +16,7 @@ import { type Partner, standInJet } from "@/lib/flight/partner";
 import { screenPoint } from "@/lib/flight/race";
 import {
   DECOY_REVEAL,
+  FIRE_INTERVAL,
   fire,
   GUN,
   LOCK,
@@ -33,7 +36,7 @@ import {
   threatsLeft,
   totalThreats,
 } from "@/lib/flight/strike";
-import { clamp, length, sub, type Vec3 } from "@/lib/flight/vec";
+import { clamp, fromAttitude, length, sub, type Vec3 } from "@/lib/flight/vec";
 import type { OpticsBridge, OpticsFrame, OpticsMode } from "../DroneOptics";
 import type { FlightAudio, RaceCue } from "../flight-audio";
 import type { HudStore } from "../hud-store";
@@ -48,6 +51,7 @@ import { loadStrikeRecord, saveStrikeRecord } from "../strike-records";
 import { createAircraftLayer } from "../three/aircraft-layer";
 import { createStrikeLayer } from "../three/strike-layer";
 import { applyLook, LOOKS } from "../time-of-day";
+import { createCoopLink } from "./coop-link";
 import { FLIGHT_KEYS, readInput } from "./drone-sim";
 import { droneOptics } from "./optics";
 import { createStrikeEffects } from "./strike-effects";
@@ -81,6 +85,28 @@ const SHAKE = 2.5;
 const HUNTER_WARNING = 1500;
 /** The gun's pipper shows for a drone this close, metres. */
 const GUN_RANGE = 1500;
+
+/**
+ * A scenario's game, under drone-defence rules: the same for drone defence
+ * and for an online co-op match (whichever aircraft hosts), so both players'
+ * games agree. Positions are metres from the site; `siteGround` is its height.
+ */
+export const strikeSpec = (
+  s: StrikeScenario,
+  siteGround: number,
+): StrikeSpec => ({
+  site: [0, 0, siteGround + s.site.aim],
+  siteRadius: s.site.radius,
+  spawnDistance: s.spawnDistance,
+  launchers: s.launchers?.map((at) => toLocal(s.site.position, at)),
+  waves: s.waves,
+  hitsAllowed: s.hitsAllowed,
+  magazine: s.magazine,
+  firstBreak: s.firstBreak,
+  breakTime: s.breakTime,
+  playerHits: s.playerHits ?? PLAYER_HITS,
+  rounds: s.rounds,
+});
 
 /** How far from the site the battle reaches: the spawn ring or the furthest launcher, metres. */
 export const reach = (s: StrikeScenario) =>
@@ -140,6 +166,8 @@ export function createStrikeSim(
     settings: () => FlightSettings;
     scenario: StrikeScenario;
     locale: "en";
+    /** Online co-op: the room, this browser's role, and whether it runs the game. */
+    coop?: CoopSession;
   },
 ): StrikeSim {
   const { map } = host;
@@ -158,8 +186,28 @@ export function createStrikeSim(
   map.addLayer(layer.layer);
   const partnerLayer = createAircraftLayer(PARTNER_LAYER);
   map.addLayer(partnerLayer.layer);
-  /** The F-14 in a co-op launch-site mission (a stand-in for now). */
+  /** The F-14 in a co-op launch-site mission, flown by the stand-in. */
   let partner: Partner | null = null;
+  /** Online co-op: the partner's F-14 comes over the relay instead. */
+  const link = deps.coop
+    ? createCoopLink(deps.coop, {
+        game: () => game,
+        onEvents: (events) => {
+          if (drone) onEvents(events, cameraLocal(drone));
+        },
+        onStart: () => {
+          if (!grid || journeys.active) return;
+          begin();
+          present();
+          host.wake();
+        },
+      })
+    : null;
+  /** A started match restarts on the next begin (co-op tells the guest which). */
+  let begun = false;
+  /** Guest: its own launcher cycle and gun rate, the host's game keeps the count. */
+  let guestCooldown = 0;
+  let guestGunCooldown = 0;
 
   let scenario = deps.scenario;
   let origin: LngLat = scenario.site.position;
@@ -211,19 +259,7 @@ export function createStrikeSim(
     return [Math.sin(b) * Math.sin(p), Math.cos(b) * Math.sin(p), -Math.cos(p)];
   };
 
-  const spec = (s: StrikeScenario): StrikeSpec => ({
-    site: [0, 0, siteGround + s.site.aim],
-    siteRadius: s.site.radius,
-    spawnDistance: s.spawnDistance,
-    launchers: s.launchers?.map((at) => toLocal(origin, at)),
-    waves: s.waves,
-    hitsAllowed: s.hitsAllowed,
-    magazine: s.magazine,
-    firstBreak: s.firstBreak,
-    breakTime: s.breakTime,
-    playerHits: s.playerHits ?? PLAYER_HITS,
-    rounds: s.rounds,
-  });
+  const spec = (s: StrikeScenario) => strikeSpec(s, siteGround);
 
   const publish = (patch: Partial<StrikeStatus>) => {
     if (!status) return;
@@ -244,11 +280,14 @@ export function createStrikeSim(
       ground: startGround,
     });
     lastGround = startGround;
-    game = newStrike(spec(s), Math.floor(Math.random() * 1e9));
+    const seed = Math.floor(Math.random() * 1e9);
+    game = newStrike(spec(s), seed);
     partner =
-      deps.settings().partner && s.jet
+      !link && deps.settings().partner && s.jet
         ? standInJet(game.spec.site, ground)
         : null;
+    link?.started(seed, begun);
+    begun = true;
     lock = newLock();
     fx.clear();
     shakeUntil = -1;
@@ -271,6 +310,10 @@ export function createStrikeSim(
       total: totalThreats(game.spec),
       banner: null,
       result: null,
+      // In co-op the partner's F-14 is after the launchers: show how many stand.
+      launchers: link
+        ? { left: game.launchers.length, total: game.launchers.length }
+        : undefined,
     };
     deps.strike.setStatus(status);
   };
@@ -390,12 +433,24 @@ export function createStrikeSim(
           cue("alarm");
           break;
         }
+        case "launcher-down":
+          // A co-op guest hears of it before the snapshot that shows it.
+          if (game.launchers[e.index]) game.launchers[e.index].alive = false;
+          if (status?.launchers) {
+            const left = game.launchers.filter((l) => l.alive).length;
+            publish({
+              launchers: { left, total: game.launchers.length },
+              banner: { kind: "launcher", n: left, seq: ++bannerSeq },
+            });
+          }
+          break;
         case "won":
         case "lost": {
           const score = scoreStrike(game);
           const best = loadStrikeRecord(scenario.id);
           const won = e.kind === "won";
-          const newBest = won && (!best || score.total > best.score);
+          // A co-op score is not a solo best.
+          const newBest = !link && won && (!best || score.total > best.score);
           if (newBest) saveStrikeRecord(scenario.id, { score: score.total });
           publish({
             phase: e.kind,
@@ -453,7 +508,7 @@ export function createStrikeSim(
       navLights: scenario.look === "night",
       time: game.time,
     });
-    const ally = partner?.state() ?? null;
+    const ally = link ? link.partner() : (partner?.state() ?? null);
     partnerLayer.show(
       ally && {
         eye,
@@ -664,8 +719,29 @@ export function createStrikeSim(
 
       const camera = cameraLocal(drone);
       const forward = forwardOf(drone);
-      const events = stepStrike(game, ground, dt, camera);
+      // The host (or a solo game) steps the game; a co-op guest draws the
+      // host's, carried on between its snapshots.
+      let events: StrikeEvent[] = [];
+      if (!link || link.host) {
+        link?.applyShots(game);
+        events = stepStrike(game, ground, dt, camera);
+        link?.sendEvents(events);
+      } else {
+        coast(game, dt);
+      }
+      link?.tick(dt, {
+        position: camera,
+        velocity: drone.velocity,
+        orientation: fromAttitude({
+          heading: drone.heading,
+          pitch: 0,
+          roll: drone.roll,
+        }),
+      });
       partner?.step(dt);
+      const guest = link !== null && !link.host;
+      guestCooldown = Math.max(0, guestCooldown - dt);
+      guestGunCooldown = Math.max(0, guestGunCooldown - dt);
       fx.step(dt, game.time, ground);
       const wasLocked = lock.locked;
       stepLock(lock, camera, forward, game.threats, dt, ground);
@@ -676,7 +752,18 @@ export function createStrikeSim(
           camera[1] + forward[1] * 3,
           camera[2] + forward[2] * 3 - 1,
         ];
-        if (shoot(game, from, drone.velocity, forward)) cue("gun", 0.8);
+        if (guest) {
+          if (link && game.ammo > 0 && guestGunCooldown <= 0) {
+            link.fire({
+              weapon: "gun",
+              position: from,
+              velocity: drone.velocity,
+              forward,
+            });
+            guestGunCooldown = 1 / GUN.rate;
+            cue("gun", 0.8);
+          }
+        } else if (shoot(game, from, drone.velocity, forward)) cue("gun", 0.8);
       }
       if (wantFire) {
         wantFire = false;
@@ -685,7 +772,19 @@ export function createStrikeSim(
           camera[1] + forward[1] * LAUNCH_AHEAD,
           camera[2] + forward[2] * LAUNCH_AHEAD - LAUNCH_BELOW,
         ];
-        if (
+        if (guest) {
+          if (link && game.magazine > 0 && guestCooldown <= 0) {
+            link.fire({
+              weapon: "missile",
+              position: from,
+              velocity: drone.velocity,
+              forward,
+              target: lock.locked ? lock.target : null,
+            });
+            guestCooldown = FIRE_INTERVAL;
+            cue("launch");
+          }
+        } else if (
           fire(
             game,
             from,
@@ -775,6 +874,7 @@ export function createStrikeSim(
       if (disposed) return;
       disposed = true;
       journeys.cancel();
+      link?.dispose();
       deps.audio.silence();
       layer.show(null);
       host.setTravelling(null);

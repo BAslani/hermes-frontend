@@ -14,6 +14,7 @@ import type { MissionConfig } from "@/config/missions";
 import { AIRPORTS, type Airport, type Place } from "@/config/playground";
 import { STRIKES, type StrikeScenario } from "@/config/strikes";
 import { LOCALES, type Locale } from "@/content";
+import type { CoopSession } from "@/lib/coop/client";
 import { rewriteImageryRequest, satellite3dStyle } from "@/lib/imagery";
 import {
   configureWorker,
@@ -85,9 +86,12 @@ function isFatal(event: ErrorEvent, styleReady: boolean) {
 export function PlaygroundPage({
   vehicle,
   locale = "en",
+  coop,
 }: {
   vehicle: Vehicle;
   locale?: Locale;
+  /** Online co-op: the room this game is played in (the co-op page passes it). */
+  coop?: CoopSession;
 }) {
   const { dict, dir } = LOCALES[locale];
   const t = dict.playgroundPage;
@@ -101,7 +105,9 @@ export function PlaygroundPage({
   /** Where the airplane lines up when it is selected. */
   const airportRef = useRef<Airport>(AIRPORTS[0]);
   /** The drone-defence scenario to start when the interceptor is created. */
-  const scenarioRef = useRef<StrikeScenario>(STRIKES[0]);
+  const scenarioRef = useRef<StrikeScenario>(
+    STRIKES.find((s) => s.id === coop?.scenario) ?? STRIKES[0],
+  );
 
   const [status, setStatusState] = useState<Status>("loading");
   /** Bumped by Retry: tears the map down and builds a new one. */
@@ -301,6 +307,7 @@ export function PlaygroundPage({
             settings: getSettings,
             airport: airportRef.current,
             locale,
+            coop,
           })
         : vehicle === "helicopter"
           ? createHeliSim(host, {
@@ -321,6 +328,7 @@ export function PlaygroundPage({
                 settings: getSettings,
                 scenario: scenarioRef.current,
                 locale,
+                coop,
               })
             : createDroneSim(host, hudStore, opticsBridge);
     simRef.current = sim;
@@ -347,6 +355,7 @@ export function PlaygroundPage({
     audio,
     setStatus,
     locale,
+    coop,
   ]);
 
   const retry = useCallback(() => {
@@ -743,6 +752,14 @@ export function PlaygroundPage({
           onCourse={startRace}
           onMission={startMission}
           onStrike={startStrike}
+          coop={
+            coop && {
+              code: coop.code,
+              role: coop.role,
+              host: coop.host,
+              missionName: scenarioRef.current.name[locale],
+            }
+          }
         />
       )}
     </div>

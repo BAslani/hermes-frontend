@@ -7,7 +7,9 @@ import {
   PLACES,
   type Place,
 } from "@/config/playground";
-import type { StrikeScenario } from "@/config/strikes";
+import { STRIKES, type StrikeScenario } from "@/config/strikes";
+import type { CoopSession } from "@/lib/coop/client";
+import { coast } from "@/lib/coop/match";
 import { parseViewerHash } from "@/lib/drone-flight";
 import {
   type Airframe,
@@ -117,9 +119,10 @@ import { JET_EYE } from "../three/jet-model";
 import { RACER_EYE } from "../three/racer-model";
 import { createStrikeLayer } from "../three/strike-layer";
 import { applyLook, LOOKS } from "../time-of-day";
+import { createCoopLink } from "./coop-link";
 import { PLACE_KEYS } from "./drone-sim";
 import { createStrikeEffects } from "./strike-effects";
-import { elevationGrid, reach } from "./strike-sim";
+import { elevationGrid, reach, strikeSpec } from "./strike-sim";
 import { Journeys, type Sim, type SimHost, setNearFar } from "./types";
 
 export interface AirplaneSim extends Sim {
@@ -221,6 +224,8 @@ export function createAirplaneSim(
     settings: () => FlightSettings;
     airport: Airport;
     locale: "en";
+    /** Online co-op: the room, this browser's role, and whether it runs the game. */
+    coop?: CoopSession;
   },
 ): AirplaneSim {
   const { map } = host;
@@ -276,7 +281,12 @@ export function createAirplaneSim(
   let plane: Airplane | null = null;
   let previous: RigidBody | null = null;
   let pilot: PilotState = newPilot();
-  let spawn: Spawn = { airport: deps.airport };
+  const coopScenario = deps.coop
+    ? STRIKES.find((s) => s.id === deps.coop?.scenario && s.jet)
+    : undefined;
+  let spawn: Spawn = coopScenario
+    ? { strike: coopScenario }
+    : { airport: deps.airport };
   let mode: CameraMode = "chase";
   let chase: ChaseState = { position: [0, 0, 0], ready: false };
   const orbit = newOrbit();
@@ -303,6 +313,25 @@ export function createAirplaneSim(
   let bannerSeq = 0;
   /** Where the camera was last frame: the seeker looks where the screen does. */
   let lastCamera: CameraPose | null = null;
+  /** Online co-op: the partner's drone comes over the relay instead of the stand-in. */
+  const link = deps.coop
+    ? createCoopLink(deps.coop, {
+        game: () => mission?.game ?? null,
+        onEvents: (events) => {
+          if (mission && plane)
+            onStrikeEvents(
+              events,
+              sub(plane.body.position, siteOffset(mission)),
+            );
+        },
+        onStart: () => {
+          // The host started over: so does this side, back at the start.
+          if (mission && !journeys.active) place(spawn);
+        },
+      })
+    : null;
+  /** A started match restarts on the next start (co-op tells the guest which). */
+  let begun = false;
 
   const cue = (name: RaceCue, volume = 1) => {
     if (deps.settings().sound) deps.audio.cue(name, volume);
@@ -443,8 +472,16 @@ export function createAirplaneSim(
     const nose = rotate(body.orientation, [1, 0, 0]);
     const at = (mount: Vec3) =>
       toGame(add(body.position, rotate(body.orientation, mount)));
+    const guest = link !== null && !link.host;
     if (host.keys.has("Space") && m.rounds > 0 && m.gunCooldown <= 0) {
-      addRound(game, at(JET_GUN), body.velocity, nose);
+      if (guest)
+        link?.fire({
+          weapon: "gun",
+          position: at(JET_GUN),
+          velocity: body.velocity,
+          forward: nose,
+        });
+      else addRound(game, at(JET_GUN), body.velocity, nose);
       m.rounds -= 1;
       m.gunCooldown = 1 / GUN.rate;
       cue("gun", 0.7);
@@ -455,15 +492,28 @@ export function createAirplaneSim(
         // Locked on a launcher, it steers for that; on a drone, for the drone.
         // Its warhead destroys a launcher in one burst (the drone's takes two).
         const target = m.lock.locked ? m.lock.target : null;
-        addMissile(
-          game,
-          at(JET_PYLON),
-          body.velocity,
-          nose,
-          target !== null && target >= 0 ? target : null,
-          target !== null && target < 0 ? lockedLauncher(target) : undefined,
-          LAUNCHER.health,
-        );
+        const threat = target !== null && target >= 0 ? target : null;
+        const launcher =
+          target !== null && target < 0 ? lockedLauncher(target) : undefined;
+        if (guest)
+          link?.fire({
+            weapon: "missile",
+            position: at(JET_PYLON),
+            velocity: body.velocity,
+            forward: nose,
+            target: threat,
+            launcher,
+          });
+        else
+          addMissile(
+            game,
+            at(JET_PYLON),
+            body.velocity,
+            nose,
+            threat,
+            launcher,
+            LAUNCHER.health,
+          );
         m.missiles -= 1;
         m.cooldown = FIRE_INTERVAL;
         cue("launch");
@@ -481,7 +531,7 @@ export function createAirplaneSim(
     const { game, lock } = m;
     const cameraGame = sub(camera.position, siteOffset(m));
     const rel = (p: Vec3) => sub(p, cameraGame);
-    const ally = m.partner?.state() ?? null;
+    const ally = link ? link.partner() : (m.partner?.state() ?? null);
     const fov = map.getVerticalFieldOfView();
     strikeLayer.show({
       eye,
@@ -967,21 +1017,28 @@ export function createAirplaneSim(
         reach(scenario) + 1500,
         siteGround,
       );
+      // Online, both players play one game under drone-defence rules (the
+      // drone defends the site); alone, the F-14's strike with its own.
+      const seed = Math.floor(Math.random() * 1e9);
       const game = newStrike(
-        {
-          site: [0, 0, siteGround + scenario.site.aim],
-          siteRadius: scenario.site.radius,
-          spawnDistance: scenario.spawnDistance,
-          launchers: scenario.launchers?.map((at) => toLocal(site, at)),
-          waves: scenario.waves,
-          hitsAllowed: jet.hitsAllowed,
-          magazine: 0,
-          rounds: 0,
-          firstBreak: scenario.firstBreak,
-          breakTime: scenario.breakTime,
-        },
-        Math.floor(Math.random() * 1e9),
+        link
+          ? strikeSpec(scenario, siteGround)
+          : {
+              site: [0, 0, siteGround + scenario.site.aim],
+              siteRadius: scenario.site.radius,
+              spawnDistance: scenario.spawnDistance,
+              launchers: scenario.launchers?.map((at) => toLocal(site, at)),
+              waves: scenario.waves,
+              hitsAllowed: jet.hitsAllowed,
+              magazine: 0,
+              rounds: 0,
+              firstBreak: scenario.firstBreak,
+              breakTime: scenario.breakTime,
+            },
+        seed,
       );
+      link?.started(seed, begun);
+      begun = true;
       fx.clear();
       wantFire = false;
       // Co-op: the partner's interceptor hovers where drone defence starts it.
@@ -995,12 +1052,13 @@ export function createAirplaneSim(
         game,
         grid,
         lock: newLock(),
-        partner: settings.partner
-          ? standInDrone(
-              [startEast, startNorth, startGround + scenario.start.height],
-              scenario.start.heading,
-            )
-          : null,
+        partner:
+          !link && settings.partner
+            ? standInDrone(
+                [startEast, startNorth, startGround + scenario.start.height],
+                scenario.start.heading,
+              )
+            : null,
         missiles: jet.missiles,
         rounds: jet.rounds,
         cooldown: 0,
@@ -1011,8 +1069,8 @@ export function createAirplaneSim(
           phase: "break",
           wave: -1,
           waveCount: scenario.waves.length,
-          hitsLeft: jet.hitsAllowed,
-          hitsAllowed: jet.hitsAllowed,
+          hitsLeft: game.spec.hitsAllowed,
+          hitsAllowed: game.spec.hitsAllowed,
           armourLeft: 0,
           armour: 0,
           hunters: false,
@@ -1177,6 +1235,8 @@ export function createAirplaneSim(
         const current = plane;
         const gates = localGates();
         const strikeEvents: StrikeEvent[] = [];
+        const steps = !link || link.host;
+        if (mission && steps) link?.applyShots(mission.game);
         alpha = fixed.advance(dt, (h) => {
           previous = cloneBody(current.body);
           if (active?.race.phase === "countdown") {
@@ -1203,7 +1263,7 @@ export function createAirplaneSim(
             env,
             h,
           );
-          if (mission && !current.crashed) {
+          if (mission && steps && !current.crashed) {
             // Hunters go for the partner's interceptor; without one, for the site.
             mission.partner?.step(h);
             strikeEvents.push(
@@ -1211,7 +1271,7 @@ export function createAirplaneSim(
                 mission.game,
                 strikeGround,
                 h,
-                mission.partner?.state().position,
+                (link?.partner() ?? mission.partner?.state())?.position,
               ),
             );
           }
@@ -1270,6 +1330,13 @@ export function createAirplaneSim(
         env.ground = ground;
         if (plane.crashed) host.setCrash(plane.crashed);
         if (mission) {
+          if (!steps) coast(mission.game, dt);
+          link?.sendEvents(strikeEvents);
+          link?.tick(dt, {
+            position: sub(plane.body.position, siteOffset(mission)),
+            velocity: plane.body.velocity,
+            orientation: plane.body.orientation,
+          });
           if (!plane.crashed) strikeWeapons(mission, plane.body, dt);
           fx.step(dt, mission.game.time, strikeGround);
           onStrikeEvents(
@@ -1377,6 +1444,7 @@ export function createAirplaneSim(
       if (disposed) return;
       disposed = true;
       journeys.cancel();
+      link?.dispose();
       deps.audio.silence();
       aircraft.show(null);
       host.setCrash(null);

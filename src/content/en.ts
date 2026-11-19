@@ -22,10 +22,50 @@ export const en = {
       blurb:
         "Deliver supplies, winch up climbers and land beside crashes in the Alborz.",
     },
+    coop: {
+      title: "Online co-op",
+      blurb:
+        "Two players, one mission: one flies the interceptor drone and defends the target, the other the F-14 and destroys the drone launchers.",
+    },
     airplane: {
       title: "Airplane and air races",
       blurb:
         "Take off from a real runway in a trainer or a jet, then race through gates.",
+    },
+  },
+  coopPage: {
+    title: "Online co-op",
+    intro:
+      "One player flies the interceptor drone and defends the target; the other flies the F-14 and destroys the launchers the attack drones come from. Whoever creates the room runs the game.",
+    youFly: "You fly",
+    roles: {
+      drone: { name: "Interceptor drone", job: "Defend the target" },
+      jet: { name: "F-14", job: "Destroy the launchers" },
+    },
+    create: "Create a room",
+    mission: "Mission",
+    createButton: "Create room",
+    join: "Join a room",
+    code: "Room code",
+    joinButton: "Join",
+    shareCode: "Send this code to your partner:",
+    waiting: "Waiting for the {role} to join…",
+    cancel: "Cancel",
+    connecting: "Connecting…",
+    backToLobby: "Back to the lobby",
+    errors: {
+      unreachable: "Could not reach the co-op server. Is it running?",
+      "room-not-found": "No room with that code.",
+      "room-full": "That room already has two players.",
+      "role-taken":
+        "Your partner already flies that aircraft: pick the other one.",
+      "bad-message": "The server refused a message.",
+    },
+    notices: {
+      partnerLeft: "Your partner left the room.",
+      hostLeft: "The room closed: the host left.",
+      expired: "The room closed after ten minutes without play.",
+      disconnected: "Lost the connection to the co-op server.",
     },
   },
   playgroundPage: {
@@ -104,6 +144,16 @@ export const en = {
         reset: "Restart",
         pause: "Pause",
       },
+    },
+    coop: {
+      title: "Online co-op",
+      mission: "Mission",
+      room: "Room",
+      youFly: "You fly",
+      host: "you run the game",
+      roles: { drone: "Interceptor drone", jet: "F-14" },
+      cardNote:
+        "Start when you are ready: your partner can start any time. Esc pauses only you; in the host's browser it also holds the game.",
     },
     jetStrike: {
       title: "Strike missions",

@@ -47,6 +47,7 @@ export function PlaygroundCard({
   onCourse,
   onMission,
   onStrike,
+  coop,
 }: {
   t: Strings;
   locale: Locale;
@@ -62,6 +63,13 @@ export function PlaygroundCard({
   onCourse(course: Course): void;
   onMission(mission: MissionConfig): void;
   onStrike(scenario: StrikeScenario): void;
+  /** Online co-op: the room this card starts, instead of the mission lists. */
+  coop?: {
+    code: string;
+    role: "drone" | "jet";
+    host: boolean;
+    missionName: string;
+  };
 }) {
   const a = t.airplane.controls;
   const h = t.helicopter.controls;
@@ -285,245 +293,271 @@ export function PlaygroundCard({
             )}
           </section>
 
-          <section>
-            {vehicle === "strike" && (
-              <>
-                <h2 className={heading}>{t.strike.title}</h2>
-                <ul className="mb-6 grid gap-1 text-sm">
-                  {STRIKES.map((scenario) => {
-                    // The card only renders in the browser (after the map loads), so reading storage here is safe.
-                    const best = loadStrikeRecord(scenario.id);
-                    const medal = best
-                      ? strikeMedal(best.score, scenario.medals)
-                      : null;
-                    return (
-                      <li key={scenario.id}>
+          {coop ? (
+            // Online co-op: only the room's mission; the lobby picked it.
+            <section>
+              <h2 className={heading}>{t.coop.title}</h2>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                <dt className="text-night-muted">{t.coop.mission}</dt>
+                <dd className="text-white">{coop.missionName}</dd>
+                <dt className="text-night-muted">{t.coop.room}</dt>
+                <dd className="font-mono tracking-widest text-white">
+                  {coop.code}
+                </dd>
+                <dt className="text-night-muted">{t.coop.youFly}</dt>
+                <dd className="text-white">
+                  {coop.role === "drone"
+                    ? t.coop.roles.drone
+                    : t.coop.roles.jet}
+                  {coop.host ? ` · ${t.coop.host}` : ""}
+                </dd>
+              </dl>
+              <p className="mt-3 text-xs text-night-muted">{t.coop.cardNote}</p>
+            </section>
+          ) : (
+            <section>
+              {vehicle === "strike" && (
+                <>
+                  <h2 className={heading}>{t.strike.title}</h2>
+                  <ul className="mb-6 grid gap-1 text-sm">
+                    {STRIKES.map((scenario) => {
+                      // The card only renders in the browser (after the map loads), so reading storage here is safe.
+                      const best = loadStrikeRecord(scenario.id);
+                      const medal = best
+                        ? strikeMedal(best.score, scenario.medals)
+                        : null;
+                      return (
+                        <li key={scenario.id}>
+                          <button
+                            type="button"
+                            disabled={touchOnly}
+                            onClick={() => onStrike(scenario)}
+                            className={`${row} items-start`}
+                          >
+                            <span aria-hidden className="mt-0.5 text-[#ff4d4d]">
+                              ⌖
+                            </span>
+                            <span className="grid gap-0.5">
+                              <span className="font-medium text-white">
+                                {scenario.name[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {scenario.brief[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {best
+                                  ? `${t.strike.best.replace("{score}", number.format(best.score))}${medal ? ` · ${t.strike.medals[medal]}` : ""}`
+                                  : t.strike.noScore}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+              {vehicle === "helicopter" && (
+                <>
+                  <h2 className={heading}>{t.mission.title}</h2>
+                  <p className="mb-2 text-xs text-night-muted">
+                    {t.mission.intro}
+                  </p>
+                  <ul className="mb-6 grid gap-1 text-sm">
+                    {MISSIONS.map((mission) => {
+                      // The card only renders in the browser (after the map loads), so reading storage here is safe.
+                      const best = loadMissionRecord(mission.id);
+                      const medal = best
+                        ? missionMedal(best.score, mission.medals)
+                        : null;
+                      return (
+                        <li key={mission.id}>
+                          <button
+                            type="button"
+                            disabled={touchOnly}
+                            onClick={() => onMission(mission)}
+                            className={`${row} items-start`}
+                          >
+                            <span aria-hidden className="mt-0.5 text-[#ff7a2a]">
+                              ✚
+                            </span>
+                            <span className="grid gap-0.5">
+                              <span className="font-medium text-white">
+                                {mission.name[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {mission.brief[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {best
+                                  ? `${t.mission.best.replace("{score}", number.format(best.score))}${medal ? ` · ${t.mission.medals[medal]}` : ""}`
+                                  : t.mission.noScore}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+              {vehicle === "airplane" && (
+                <>
+                  <h2 className={heading}>{t.jetStrike.title}</h2>
+                  <p className="mb-2 text-xs text-night-muted">
+                    {t.jetStrike.intro}
+                  </p>
+                  <ul className="mb-6 grid gap-1 text-sm">
+                    {STRIKES.filter((scenario) => scenario.jet).map(
+                      (scenario) => (
+                        <li key={scenario.id}>
+                          <button
+                            type="button"
+                            disabled={touchOnly}
+                            onClick={() => onStrike(scenario)}
+                            className={`${row} items-start`}
+                          >
+                            <span aria-hidden className="mt-0.5 text-[#ff8a2a]">
+                              ✈
+                            </span>
+                            <span className="grid gap-0.5">
+                              <span className="font-medium text-white">
+                                {scenario.name[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {t.jetStrike.brief
+                                  .replace(
+                                    "{n}",
+                                    number.format(
+                                      scenario.launchers?.length ?? 0,
+                                    ),
+                                  )
+                                  .replace(
+                                    "{site}",
+                                    scenario.site.name[locale],
+                                  )}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      ),
+                    )}
+                  </ul>
+                  <h2 className={heading}>{t.race.title}</h2>
+                  <p className="mb-2 text-xs text-night-muted">
+                    {t.race.intro.replace(
+                      "{penalty}",
+                      number.format(MISSED_PENALTY),
+                    )}{" "}
+                    {t.race.plane}
+                  </p>
+                  <ul className="mb-6 grid gap-1 text-sm">
+                    {COURSES.map((course) => {
+                      // The card only renders in the browser (after the map loads), so reading storage here is safe.
+                      const best = loadRecord(course.id, course.gates.length);
+                      const medal = best
+                        ? medalFor(best.total, course.medals)
+                        : null;
+                      return (
+                        <li key={course.id}>
+                          <button
+                            type="button"
+                            disabled={touchOnly}
+                            onClick={() => onCourse(course)}
+                            className={`${row} items-start`}
+                          >
+                            <span aria-hidden className="mt-0.5 text-[#ffb547]">
+                              ◎
+                            </span>
+                            <span className="grid gap-0.5">
+                              <span className="font-medium text-white">
+                                {course.name[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {course.description[locale]}
+                              </span>
+                              <span className="text-xs text-night-muted">
+                                {best
+                                  ? `${t.race.best.replace("{time}", formatRaceTime(locale, best.total))}${medal ? ` · ${t.race.medals[medal]}` : ""}`
+                                  : t.race.medalTargets
+                                      .replace(
+                                        "{gold}",
+                                        formatRaceTime(
+                                          locale,
+                                          course.medals.gold,
+                                        ),
+                                      )
+                                      .replace(
+                                        "{silver}",
+                                        formatRaceTime(
+                                          locale,
+                                          course.medals.silver,
+                                        ),
+                                      )
+                                      .replace(
+                                        "{bronze}",
+                                        formatRaceTime(
+                                          locale,
+                                          course.medals.bronze,
+                                        ),
+                                      )}
+                              </span>
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+              {!freeFlight && (
+                <>
+                  <h2 className={heading}>
+                    {vehicle === "helicopter"
+                      ? t.helicopter.airportsTitle
+                      : t.airplane.airportsTitle}
+                  </h2>
+                  <ul className="mb-6 grid gap-1 text-sm">
+                    {AIRPORTS.map((airport) => (
+                      <li key={airport.id}>
                         <button
                           type="button"
                           disabled={touchOnly}
-                          onClick={() => onStrike(scenario)}
-                          className={`${row} items-start`}
+                          onClick={() => onAirport(airport)}
+                          className={row}
                         >
-                          <span aria-hidden className="mt-0.5 text-[#ff4d4d]">
-                            ⌖
-                          </span>
-                          <span className="grid gap-0.5">
-                            <span className="font-medium text-white">
-                              {scenario.name[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {scenario.brief[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {best
-                                ? `${t.strike.best.replace("{score}", number.format(best.score))}${medal ? ` · ${t.strike.medals[medal]}` : ""}`
-                                : t.strike.noScore}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-            {vehicle === "helicopter" && (
-              <>
-                <h2 className={heading}>{t.mission.title}</h2>
-                <p className="mb-2 text-xs text-night-muted">
-                  {t.mission.intro}
-                </p>
-                <ul className="mb-6 grid gap-1 text-sm">
-                  {MISSIONS.map((mission) => {
-                    // The card only renders in the browser (after the map loads), so reading storage here is safe.
-                    const best = loadMissionRecord(mission.id);
-                    const medal = best
-                      ? missionMedal(best.score, mission.medals)
-                      : null;
-                    return (
-                      <li key={mission.id}>
-                        <button
-                          type="button"
-                          disabled={touchOnly}
-                          onClick={() => onMission(mission)}
-                          className={`${row} items-start`}
-                        >
-                          <span aria-hidden className="mt-0.5 text-[#ff7a2a]">
-                            ✚
-                          </span>
-                          <span className="grid gap-0.5">
-                            <span className="font-medium text-white">
-                              {mission.name[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {mission.brief[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {best
-                                ? `${t.mission.best.replace("{score}", number.format(best.score))}${medal ? ` · ${t.mission.medals[medal]}` : ""}`
-                                : t.mission.noScore}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-            {vehicle === "airplane" && (
-              <>
-                <h2 className={heading}>{t.jetStrike.title}</h2>
-                <p className="mb-2 text-xs text-night-muted">
-                  {t.jetStrike.intro}
-                </p>
-                <ul className="mb-6 grid gap-1 text-sm">
-                  {STRIKES.filter((scenario) => scenario.jet).map(
-                    (scenario) => (
-                      <li key={scenario.id}>
-                        <button
-                          type="button"
-                          disabled={touchOnly}
-                          onClick={() => onStrike(scenario)}
-                          className={`${row} items-start`}
-                        >
-                          <span aria-hidden className="mt-0.5 text-[#ff8a2a]">
+                          <span aria-hidden className="text-accent-bright">
                             ✈
                           </span>
-                          <span className="grid gap-0.5">
-                            <span className="font-medium text-white">
-                              {scenario.name[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {t.jetStrike.brief
-                                .replace(
-                                  "{n}",
-                                  number.format(
-                                    scenario.launchers?.length ?? 0,
-                                  ),
-                                )
-                                .replace("{site}", scenario.site.name[locale])}
-                            </span>
-                          </span>
+                          {airport.name[locale]}
                         </button>
                       </li>
-                    ),
-                  )}
-                </ul>
-                <h2 className={heading}>{t.race.title}</h2>
-                <p className="mb-2 text-xs text-night-muted">
-                  {t.race.intro.replace(
-                    "{penalty}",
-                    number.format(MISSED_PENALTY),
-                  )}{" "}
-                  {t.race.plane}
-                </p>
-                <ul className="mb-6 grid gap-1 text-sm">
-                  {COURSES.map((course) => {
-                    // The card only renders in the browser (after the map loads), so reading storage here is safe.
-                    const best = loadRecord(course.id, course.gates.length);
-                    const medal = best
-                      ? medalFor(best.total, course.medals)
-                      : null;
-                    return (
-                      <li key={course.id}>
-                        <button
-                          type="button"
-                          disabled={touchOnly}
-                          onClick={() => onCourse(course)}
-                          className={`${row} items-start`}
-                        >
-                          <span aria-hidden className="mt-0.5 text-[#ffb547]">
-                            ◎
-                          </span>
-                          <span className="grid gap-0.5">
-                            <span className="font-medium text-white">
-                              {course.name[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {course.description[locale]}
-                            </span>
-                            <span className="text-xs text-night-muted">
-                              {best
-                                ? `${t.race.best.replace("{time}", formatRaceTime(locale, best.total))}${medal ? ` · ${t.race.medals[medal]}` : ""}`
-                                : t.race.medalTargets
-                                    .replace(
-                                      "{gold}",
-                                      formatRaceTime(
-                                        locale,
-                                        course.medals.gold,
-                                      ),
-                                    )
-                                    .replace(
-                                      "{silver}",
-                                      formatRaceTime(
-                                        locale,
-                                        course.medals.silver,
-                                      ),
-                                    )
-                                    .replace(
-                                      "{bronze}",
-                                      formatRaceTime(
-                                        locale,
-                                        course.medals.bronze,
-                                      ),
-                                    )}
-                            </span>
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-            {!freeFlight && (
-              <>
-                <h2 className={heading}>
-                  {vehicle === "helicopter"
-                    ? t.helicopter.airportsTitle
-                    : t.airplane.airportsTitle}
-                </h2>
-                <ul className="mb-6 grid gap-1 text-sm">
-                  {AIRPORTS.map((airport) => (
-                    <li key={airport.id}>
-                      <button
-                        type="button"
-                        disabled={touchOnly}
-                        onClick={() => onAirport(airport)}
-                        className={row}
-                      >
-                        <span aria-hidden className="text-accent-bright">
-                          ✈
-                        </span>
-                        {airport.name[locale]}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {vehicle !== "strike" && (
-              <h2 className={heading}>{t.placesTitle}</h2>
-            )}
-            <ul
-              className={`grid gap-1 text-sm ${vehicle === "strike" ? "hidden" : ""}`}
-            >
-              {PLACES.map((place, index) => (
-                <li key={place.id}>
-                  <button
-                    type="button"
-                    disabled={touchOnly}
-                    onClick={() => onPlace(place)}
-                    className={row}
-                  >
-                    <kbd className={kbd}>{PLACE_KEYS[index]?.slice(-1)}</kbd>
-                    {place.name[locale]}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {vehicle !== "strike" && (
+                <h2 className={heading}>{t.placesTitle}</h2>
+              )}
+              <ul
+                className={`grid gap-1 text-sm ${vehicle === "strike" ? "hidden" : ""}`}
+              >
+                {PLACES.map((place, index) => (
+                  <li key={place.id}>
+                    <button
+                      type="button"
+                      disabled={touchOnly}
+                      onClick={() => onPlace(place)}
+                      className={row}
+                    >
+                      <kbd className={kbd}>{PLACE_KEYS[index]?.slice(-1)}</kbd>
+                      {place.name[locale]}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
 
         {touchOnly && (
