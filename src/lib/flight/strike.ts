@@ -135,9 +135,27 @@ export const PLAYER_HITS = 3;
 
 /** Drones appear above the highest ground this far along their way in, metres. */
 const SPAWN_CLEAR = 1200;
+/** A launched drone leaves the rail this high above the ground, metres, climbing at this angle. */
+const LAUNCH = { height: 4, pitch: 35 * RAD };
 
 /** Shortest time between launches, s. */
 export const FIRE_INTERVAL = 0.5;
+
+/**
+ * Drone launchers on the ground: what it takes to destroy one. Missile bursts
+ * and gun rounds wear its health down; destroyed, it launches nothing more.
+ */
+export const LAUNCHER = {
+  health: 100,
+  /** A missile bursting within `blast` metres takes this much... */
+  missile: 50,
+  blast: 20,
+  /** ...and a round passing within `hitRadius` metres this much. */
+  round: 2,
+  hitRadius: 5,
+  /** Its middle, for aiming at, this high above the ground, metres. */
+  height: 2,
+} as const;
 
 /**
  * The close-range gun: rounds that fly ballistically and destroy a drone
@@ -178,6 +196,12 @@ export interface WaveGroup {
   kind?: ThreatKind;
   /** A swarm: the group appears together and flies abreast, this many metres apart (interval and spread then apply to the whole group). */
   formation?: number;
+  /**
+   * Takes off from this launcher (an index into the spec's `launchers`)
+   * instead of appearing in the air on the ring; `from` and `spread` are then
+   * unused.
+   */
+  launcher?: number;
 }
 
 export interface StrikeSpec {
@@ -187,6 +211,8 @@ export interface StrikeSpec {
   siteRadius: number;
   /** Drones appear this far from the site, metres. */
   spawnDistance: number;
+  /** Launchers on the ground, local east/north metres, that wave groups can take off from. */
+  launchers?: [number, number][];
   waves: { groups: WaveGroup[] }[];
   /** Hits the site takes before it is lost. */
   hitsAllowed: number;
@@ -228,6 +254,8 @@ export interface Threat {
   passed: boolean;
   /** Its place in a swarm: aims this far beside the site until the dive, so the swarm stays abreast. */
   slot: Vec3;
+  /** The launcher it took off from, if any. */
+  launcher?: number;
 }
 
 export interface Missile {
@@ -236,6 +264,8 @@ export interface Missile {
   velocity: Vec3;
   /** The drone it steers for; null flies straight (fired without a lock). */
   target: number | null;
+  /** Steers for this launcher instead of a drone. */
+  launcher?: number;
   age: number;
   alive: boolean;
 }
@@ -257,8 +287,12 @@ export interface StrikeGame {
   hits: number;
   /** Real drones downed (not decoys), and the points they were worth. */
   kills: number;
-  /** Real drones downed by missiles (accuracy counts only these). */
+  /** Real drones downed by missiles (accuracy counts these and launcher hits). */
   missileKills: number;
+  /** Missile bursts that hurt a launcher. */
+  launcherMissileHits: number;
+  /** One per spec launcher. */
+  launchers: { health: number; alive: boolean }[];
   rounds: Round[];
   ammo: number;
   gunCooldown: number;
@@ -291,6 +325,8 @@ export type StrikeEvent =
   | { kind: "site-hit"; at: Vec3; hitsLeft: number }
   | { kind: "crash"; at: Vec3; threat: number }
   | { kind: "player-hit"; at: Vec3; hitsLeft: number }
+  | { kind: "launcher-hit"; index: number; at: Vec3; healthLeft: number }
+  | { kind: "launcher-down"; index: number; at: Vec3 }
   | { kind: "won" }
   | { kind: "lost" };
 
@@ -316,6 +352,11 @@ export function newStrike(spec: StrikeSpec, seed = 1): StrikeGame {
     hits: 0,
     kills: 0,
     missileKills: 0,
+    launcherMissileHits: 0,
+    launchers: (spec.launchers ?? []).map(() => ({
+      health: LAUNCHER.health,
+      alive: true,
+    })),
     rounds: [],
     ammo: spec.rounds ?? GUN.rounds,
     gunCooldown: 0,
@@ -379,39 +420,66 @@ function startWave(game: StrikeGame, ground: GroundFn, events: StrikeEvent[]) {
   game.ammo = game.spec.rounds ?? GUN.rounds;
   const { site, spawnDistance } = game.spec;
   for (const group of game.spec.waves[game.wave].groups) {
+    const pad =
+      group.launcher === undefined
+        ? null
+        : game.spec.launchers?.[group.launcher];
+    if (pad === undefined)
+      throw new Error(`No launcher ${group.launcher} in this scenario`);
+    // A destroyed launcher launches nothing more.
+    if (pad && !game.launchers[group.launcher!].alive) continue;
+    // From a launcher: its bearing and distance from the site; otherwise the ring.
+    const padBearing = pad ? Math.atan2(pad[0] - site[0], pad[1] - site[1]) : 0;
+    const distance = pad
+      ? Math.hypot(pad[0] - site[0], pad[1] - site[1])
+      : spawnDistance;
     // A swarm shares one bearing and one weave; others draw their own.
     const swarmBearing =
       (group.from + (random(game) * 2 - 1) * group.spread) * RAD;
     const swarmPhase = random(game) * Math.PI * 2;
     for (let i = 0; i < group.count; i++) {
-      const bearing = group.formation
+      const drawn = group.formation
         ? swarmBearing
         : (group.from + (random(game) * 2 - 1) * group.spread) * RAD;
+      const bearing = pad ? padBearing : drawn;
       const abreast = group.formation
         ? (i - (group.count - 1) / 2) * group.formation
         : 0;
       // Abreast: offset across the line in (to the right of the way in is (cos, -sin)).
       const east =
-        site[0] +
-        Math.sin(bearing) * spawnDistance -
-        Math.cos(bearing) * abreast;
+        site[0] + Math.sin(bearing) * distance - Math.cos(bearing) * abreast;
       const north =
-        site[1] +
-        Math.cos(bearing) * spawnDistance +
-        Math.sin(bearing) * abreast;
+        site[1] + Math.cos(bearing) * distance + Math.sin(bearing) * abreast;
       const heading: Vec3 = normalize([
         Math.sin(bearing + Math.PI),
         Math.cos(bearing + Math.PI),
         0,
       ]);
-      // Above the highest ground of the first stretch in, so a slope just ahead is no wall.
-      let top = -Infinity;
-      for (let d = 0; d <= SPAWN_CLEAR; d += 100)
-        top = Math.max(
-          top,
-          ground(east + heading[0] * d, north + heading[1] * d),
+      // In the air: above the highest ground of the first stretch in, so a
+      // slope just ahead is no wall. From a launcher: just off the rail,
+      // climbing towards the site.
+      let z: number;
+      let velocity: Vec3;
+      if (pad) {
+        z = ground(east, north) + LAUNCH.height;
+        velocity = scale(
+          [
+            heading[0] * Math.cos(LAUNCH.pitch),
+            heading[1] * Math.cos(LAUNCH.pitch),
+            Math.sin(LAUNCH.pitch),
+          ],
+          group.speed,
         );
-      const z = top + group.cruise;
+      } else {
+        let top = -Infinity;
+        for (let d = 0; d <= SPAWN_CLEAR; d += 100)
+          top = Math.max(
+            top,
+            ground(east + heading[0] * d, north + heading[1] * d),
+          );
+        z = top + group.cruise;
+        velocity = scale(heading, group.speed);
+      }
       game.pending.push({
         at:
           game.time +
@@ -420,10 +488,11 @@ function startWave(game: StrikeGame, ground: GroundFn, events: StrikeEvent[]) {
         threat: {
           id: game.nextId++,
           kind: group.kind ?? "attack",
+          launcher: group.launcher,
           passed: false,
           slot: [-Math.cos(bearing) * abreast, Math.sin(bearing) * abreast, 0],
           position: [east, north, z],
-          velocity: scale(heading, group.speed),
+          velocity,
           speed: group.speed,
           cruise: group.cruise,
           weave: group.weave * RAD,
@@ -573,7 +642,11 @@ export function guidance(
 }
 
 /** One missile for `h` seconds. */
-export function stepMissile(m: Missile, target: Threat | null, h: number) {
+export function stepMissile(
+  m: Missile,
+  target: { position: Vec3; velocity: Vec3; alive: boolean } | null,
+  h: number,
+) {
   m.age += h;
   const speed = Math.max(length(m.velocity), 1);
   const dir = scale(m.velocity, 1 / speed);
@@ -608,19 +681,76 @@ export function fire(
     game.phase === "lost"
   )
     return null;
+  game.magazine -= 1;
+  game.cooldown = FIRE_INTERVAL;
+  return addMissile(game, from, carrier, forward, target);
+}
+
+/**
+ * Put a missile in the air with no magazine or cycle checks: for a shooter
+ * that keeps its own (the F-14). `launcher` makes it steer for that launcher.
+ */
+export function addMissile(
+  game: StrikeGame,
+  from: Vec3,
+  carrier: Vec3,
+  forward: Vec3,
+  target: number | null,
+  launcher?: number,
+): Missile {
   const missile: Missile = {
     id: game.nextId++,
     position: [...from],
     velocity: add(carrier, scale(normalize(forward), MISSILE.launchSpeed)),
     target,
+    launcher,
     age: 0,
     alive: true,
   };
   game.missiles.push(missile);
-  game.magazine -= 1;
   game.fired += 1;
-  game.cooldown = FIRE_INTERVAL;
   return missile;
+}
+
+/** Where to aim at launcher `index`: its middle, above the ground. */
+export function launcherPosition(
+  game: StrikeGame,
+  index: number,
+  ground: GroundFn,
+): Vec3 {
+  const [east, north] = game.spec.launchers![index];
+  return [east, north, ground(east, north) + LAUNCHER.height];
+}
+
+/** Wear launcher `index` down by `amount`; destroyed, its drones still to come are cancelled. */
+function damageLauncher(
+  game: StrikeGame,
+  index: number,
+  amount: number,
+  at: Vec3,
+  events: StrikeEvent[],
+) {
+  const launcher = game.launchers[index];
+  if (!launcher.alive) return;
+  launcher.health = Math.max(0, launcher.health - amount);
+  events.push({ kind: "launcher-hit", index, at, healthLeft: launcher.health });
+  if (launcher.health > 0) return;
+  launcher.alive = false;
+  game.pending = game.pending.filter((p) => p.threat.launcher !== index);
+  events.push({ kind: "launcher-down", index, at });
+}
+
+/** Whether any drones are still to come in later waves (from launchers still standing, or the ring). */
+function dronesToCome(game: StrikeGame) {
+  return game.spec.waves
+    .slice(game.wave + 1)
+    .some((wave) =>
+      wave.groups.some(
+        (g) =>
+          g.launcher === undefined ||
+          game.launchers[g.launcher]?.alive !== false,
+      ),
+    );
 }
 
 /** A drone destroyed by a missile's burst or the gun. */
@@ -655,11 +785,20 @@ function burst(
   at: Vec3,
   ground: boolean,
   events: StrikeEvent[],
+  pads: Vec3[],
 ) {
   events.push({ kind: "burst", at, ground });
   for (const t of game.threats)
     if (t.alive && length(sub(t.position, at)) <= MISSILE.blast)
       destroy(game, t, "missile", events);
+  let hurt = false;
+  pads.forEach((pad, i) => {
+    if (game.launchers[i].alive && length(sub(pad, at)) <= LAUNCHER.blast) {
+      damageLauncher(game, i, LAUNCHER.missile, pad, events);
+      hurt = true;
+    }
+  });
+  if (hurt) game.launcherMissileHits += 1;
 }
 
 /**
@@ -681,6 +820,19 @@ export function shoot(
     game.phase === "lost"
   )
     return null;
+  game.ammo -= 1;
+  game.gunCooldown = 1 / GUN.rate;
+  return addRound(game, from, carrier, forward, spread);
+}
+
+/** Fire one round with no ammunition or rate checks: for a shooter that keeps its own (the F-14). */
+export function addRound(
+  game: StrikeGame,
+  from: Vec3,
+  carrier: Vec3,
+  forward: Vec3,
+  spread: number = GUN.spread,
+): Round {
   const f = normalize(forward);
   // Stray within a cone: two directions across the line of fire.
   const across = normalize(
@@ -697,8 +849,6 @@ export function shoot(
     alive: true,
   };
   game.rounds.push(round);
-  game.ammo -= 1;
-  game.gunCooldown = 1 / GUN.rate;
   return round;
 }
 
@@ -825,24 +975,32 @@ function step(
     }
   }
 
+  const pads = game.launchers.map((_, i) => launcherPosition(game, i, ground));
   for (const m of game.missiles) {
     if (!m.alive) continue;
-    const target =
-      m.target === null
+    const pad = m.launcher === undefined ? null : pads[m.launcher];
+    const target = pad
+      ? {
+          position: pad,
+          velocity: [0, 0, 0] as Vec3,
+          alive: game.launchers[m.launcher!].alive,
+        }
+      : m.target === null
         ? null
         : (game.threats.find((t) => t.id === m.target) ?? null);
     stepMissile(m, target, h);
     if (
       m.age > MISSILE.arm &&
-      game.threats.some(
-        (t) => t.alive && length(sub(t.position, m.position)) < MISSILE.fuse,
-      )
+      ((pad && length(sub(pad, m.position)) < MISSILE.fuse) ||
+        game.threats.some(
+          (t) => t.alive && length(sub(t.position, m.position)) < MISSILE.fuse,
+        ))
     ) {
       m.alive = false;
-      burst(game, m.position, false, events);
+      burst(game, m.position, false, events, pads);
     } else if (m.position[2] < ground(m.position[0], m.position[1])) {
       m.alive = false;
-      burst(game, m.position, true, events);
+      burst(game, m.position, true, events, pads);
     } else if (m.age > MISSILE.life) {
       m.alive = false;
       events.push({ kind: "burst", at: m.position, ground: false });
@@ -859,9 +1017,19 @@ function step(
         t.alive &&
         segmentDistance(from, r.position, t.position) < GUN.hitRadius,
     );
+    const pad = hit
+      ? -1
+      : pads.findIndex(
+          (p, i) =>
+            game.launchers[i].alive &&
+            segmentDistance(from, r.position, p) < LAUNCHER.hitRadius,
+        );
     if (hit) {
       r.alive = false;
       destroy(game, hit, "gun", events);
+    } else if (pad >= 0) {
+      r.alive = false;
+      damageLauncher(game, pad, LAUNCHER.round, pads[pad], events);
     } else if (
       r.age > GUN.life ||
       r.position[2] < ground(r.position[0], r.position[1])
@@ -873,16 +1041,19 @@ function step(
   game.missiles = game.missiles.filter((m) => m.alive);
   game.threats = game.threats.filter((t) => t.alive);
 
+  // A wave is clear when nothing is left in it; the game is won when no more
+  // drones can come (the last wave is done, or every launcher still needed is down).
   if (
-    game.phase === "wave" &&
+    (game.phase === "wave" || game.phase === "break") &&
     game.pending.length === 0 &&
     game.threats.length === 0
   ) {
-    events.push({ kind: "wave-clear", index: game.wave });
-    if (game.wave >= game.spec.waves.length - 1) {
+    if (game.phase === "wave")
+      events.push({ kind: "wave-clear", index: game.wave });
+    if (!dronesToCome(game)) {
       game.phase = "won";
       events.push({ kind: "won" });
-    } else {
+    } else if (game.phase === "wave") {
       game.phase = "break";
       game.breakLeft = game.spec.breakTime;
     }
@@ -941,14 +1112,15 @@ export function stepLock(
   lock: Lock,
   eye: Vec3,
   forward: Vec3,
-  threats: Threat[],
+  threats: { id: number; position: Vec3; alive: boolean }[],
   dt: number,
   ground: GroundFn,
+  range: number = LOCK.range,
 ) {
-  const usable = (t: Threat, cone: number) => {
+  const usable = (t: (typeof threats)[number], cone: number) => {
     if (!t.alive) return null;
     const { angle, distance } = angleTo(eye, forward, t.position);
-    if (angle > cone || distance > LOCK.range) return null;
+    if (angle > cone || distance > range) return null;
     return lineOfSight(eye, t.position, ground) ? angle : null;
   };
   const current = threats.find((t) => t.id === lock.target);
@@ -985,7 +1157,12 @@ export function scoreStrike(game: StrikeGame): StrikeScore {
   );
   const accuracy =
     game.fired > 0
-      ? Math.round(Math.min(1, game.missileKills / game.fired) * 500)
+      ? Math.round(
+          Math.min(
+            1,
+            (game.missileKills + game.launcherMissileHits) / game.fired,
+          ) * 500,
+        )
       : 0;
   return { kills, site, accuracy, total: kills + site + accuracy };
 }

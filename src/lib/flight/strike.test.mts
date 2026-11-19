@@ -2,11 +2,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  addMissile,
+  addRound,
   DECOY_REVEAL,
   fire,
   GUN,
   KINDS,
+  LAUNCHER,
   LOCK,
+  launcherPosition,
   leadPoint,
   lineOfSight,
   MISSILE,
@@ -463,4 +467,157 @@ test("gun: fires at its rate, runs dry, refills each wave; gun kills do not coun
   game.missileKills = 1;
   game.fired = 2;
   assert.equal(scoreStrike(game).accuracy, 250);
+});
+
+test("launcher: drones take off from it, climb to cruise over a ridge and reach the site", () => {
+  // A 300 m ridge between the launcher (4 km east) and the site.
+  const ridge = (e: number) => (e > 1500 && e < 2500 ? 300 : 0);
+  const pad: [number, number] = [4000, 0];
+  const game = newStrike({
+    site: [0, 0, 15],
+    siteRadius: 40,
+    spawnDistance: 6000,
+    launchers: [pad],
+    waves: [
+      {
+        groups: [
+          {
+            from: 0,
+            spread: 0,
+            count: 2,
+            interval: 3,
+            speed: 50,
+            cruise: 80,
+            weave: 0,
+            launcher: 0,
+          },
+        ],
+      },
+    ],
+    hitsAllowed: 5,
+    magazine: 0,
+    firstBreak: 1,
+    breakTime: 1,
+  });
+  stepStrike(game, ridge, 1.05);
+  const first = game.threats[0];
+  // Just off the rail at the launcher, climbing, heading for the site.
+  assert.ok(Math.hypot(first.position[0] - pad[0], first.position[1]) < 5);
+  assert.ok(first.position[2] < 10);
+  assert.ok(first.velocity[2] > 0 && first.velocity[0] < 0);
+
+  const kinds: string[] = [];
+  let highest = 0;
+  for (let t = 0; t < 300 && game.phase !== "won"; t += 0.05) {
+    kinds.push(...stepStrike(game, ridge, 0.05).map((e) => e.kind));
+    for (const th of game.threats)
+      if (th.position[0] > 1500 && th.position[0] < 2500)
+        highest = Math.max(highest, th.position[2]);
+  }
+  assert.ok(!kinds.includes("crash"));
+  assert.equal(kinds.filter((k) => k === "site-hit").length, 2);
+  assert.ok(highest > 300 + 40, "cleared the ridge");
+});
+
+test("launcher: a group naming a launcher the scenario lacks is an error", () => {
+  const game = newStrike({
+    ...spec,
+    launchers: [],
+    waves: [{ groups: [{ ...spec.waves[0].groups[0], launcher: 2 }] }],
+  });
+  assert.throws(() => stepStrike(game, flat, 5), /No launcher 2/);
+});
+
+/** Two launchers 4 km east and west of the site, each launching two drones a wave for two waves. */
+const launcherSpec = (): StrikeSpec => ({
+  site: [0, 0, 15],
+  siteRadius: 40,
+  spawnDistance: 6000,
+  launchers: [
+    [4000, 0],
+    [-4000, 0],
+  ],
+  waves: [0, 1].map(() => ({
+    groups: [0, 1].map((launcher) => ({
+      from: 0,
+      spread: 0,
+      count: 2,
+      interval: 20,
+      speed: 50,
+      cruise: 80,
+      weave: 0,
+      launcher,
+    })),
+  })),
+  hitsAllowed: 99,
+  magazine: 0,
+  firstBreak: 1,
+  breakTime: 5,
+});
+
+test("launcher: two missiles destroy it; its drones still to come are cancelled", () => {
+  const game = newStrike(launcherSpec());
+  stepStrike(game, flat, 1.05);
+  // One drone from each launcher is up; the second of each waits 20 s.
+  assert.equal(game.threats.length, 2);
+  assert.equal(game.pending.length, 2);
+  const pad = launcherPosition(game, 0, flat);
+  const kinds: string[] = [];
+  // A jet 3 km out and 600 m up, diving at it, fires one missile and then another.
+  for (let shot = 0; shot < 2; shot++) {
+    const from: [number, number, number] = [pad[0] - 3000, 0, 600];
+    addMissile(game, from, [200, 0, -40], sub(pad, from), null, 0);
+    for (let t = 0; t < 20 && game.missiles.length; t += 0.05)
+      kinds.push(...stepStrike(game, flat, 0.05).map((e) => e.kind));
+  }
+  assert.equal(kinds.filter((k) => k === "launcher-hit").length, 2);
+  assert.ok(kinds.includes("launcher-down"));
+  assert.equal(game.launchers[0].alive, false);
+  assert.equal(game.launcherMissileHits, 2);
+  // Only launcher 1's second drone is still to come.
+  assert.equal(game.pending.length, 1);
+  assert.equal(game.pending[0].threat.launcher, 1);
+});
+
+test("launcher: gun rounds wear it down", () => {
+  const game = newStrike(launcherSpec());
+  const pad = launcherPosition(game, 1, flat);
+  const from: [number, number, number] = [pad[0] + 400, 0, 120];
+  const hits = () =>
+    stepStrike(game, flat, 0.6).filter((e) => e.kind === "launcher-hit").length;
+  let count = 0;
+  for (let i = 0; i < 10; i++) {
+    addRound(game, from, [0, 0, 0], sub(pad, from), 0);
+    count += hits();
+  }
+  assert.ok(count >= 8, `${count} of 10 rounds hit`);
+  assert.equal(
+    game.launchers[1].health,
+    LAUNCHER.health - count * LAUNCHER.round,
+  );
+});
+
+test("launcher: the game is won once every launcher is down and its drones are gone", () => {
+  const game = newStrike(launcherSpec());
+  stepStrike(game, flat, 1.05);
+  for (const index of [0, 1]) {
+    const pad = launcherPosition(game, index, flat);
+    for (let shot = 0; shot < 2; shot++) {
+      const from: [number, number, number] = [pad[0] * 0.5, 0, 400];
+      addMissile(game, from, [0, 0, 0], sub(pad, from), null, index);
+      for (let t = 0; t < 20 && game.missiles.length; t += 0.05)
+        stepStrike(game, flat, 0.05);
+    }
+  }
+  assert.ok(game.launchers.every((l) => !l.alive));
+  assert.equal(game.pending.length, 0);
+  // Drones already up still have to be dealt with (here, they reach the site).
+  const kinds: string[] = [];
+  for (let t = 0; t < 200 && game.phase !== "won"; t += 0.5)
+    kinds.push(...stepStrike(game, flat, 0.5).map((e) => e.kind));
+  assert.equal(game.phase, "won");
+  assert.ok(kinds.includes("site-hit"));
+  // Won in wave 1: wave 2 never started.
+  assert.equal(game.wave, 0);
+  assert.ok(!kinds.includes("wave"));
 });

@@ -7,6 +7,7 @@ import {
   PLACES,
   type Place,
 } from "@/config/playground";
+import type { StrikeScenario } from "@/config/strikes";
 import { parseViewerHash } from "@/lib/drone-flight";
 import {
   type Airframe,
@@ -72,12 +73,36 @@ import {
   type RigidBody,
 } from "@/lib/flight/rigid-body";
 import { findRunway, lineUp, type RunwayLine } from "@/lib/flight/runway";
+import {
+  addMissile,
+  addRound,
+  FIRE_INTERVAL,
+  GUN,
+  LOCK,
+  type Lock,
+  launcherPosition,
+  newLock,
+  newStrike,
+  type StrikeEvent,
+  type StrikeGame,
+  scoreStrike,
+  stepLock,
+  stepStrike,
+  threatsLeft,
+  totalThreats,
+} from "@/lib/flight/strike";
 import { Trail } from "@/lib/flight/trail";
-import { add, clamp, rotate, sub, type Vec3 } from "@/lib/flight/vec";
+import { add, clamp, length, rotate, sub, type Vec3 } from "@/lib/flight/vec";
 import type { FlightAudio, RaceCue } from "../flight-audio";
 import type { PanelBridge } from "../InstrumentPanel";
 import type { RaceBridge, RaceStatus } from "../RaceHud";
 import { loadRecord, type RaceRecord, saveRecord } from "../race-records";
+import {
+  MAX_BOXES,
+  type StrikeBridge,
+  type StrikeFrame,
+  type StrikeStatus,
+} from "../StrikeHud";
 import type { FlightSettings } from "../settings";
 import {
   createAircraftLayer,
@@ -87,8 +112,11 @@ import {
 } from "../three/aircraft-layer";
 import { JET_EYE } from "../three/jet-model";
 import { RACER_EYE } from "../three/racer-model";
+import { createStrikeLayer } from "../three/strike-layer";
 import { applyLook, LOOKS } from "../time-of-day";
 import { PLACE_KEYS } from "./drone-sim";
+import { createStrikeEffects } from "./strike-effects";
+import { elevationGrid, reach } from "./strike-sim";
 import { Journeys, type Sim, type SimHost, setNearFar } from "./types";
 
 export interface AirplaneSim extends Sim {
@@ -96,9 +124,34 @@ export interface AirplaneSim extends Sim {
   startAt(airport: Airport): void;
   /** Start a race: airborne before the first gate, after a countdown. */
   startRace(course: Course): void;
+  /** Fly the F-14 against a scenario's drone launchers. */
+  startStrike(scenario: StrikeScenario): void;
 }
 
-type Spawn = { airport: Airport } | { place: Place } | { course: Course };
+type Spawn =
+  | { airport: Airport }
+  | { place: Place }
+  | { course: Course }
+  | { strike: StrikeScenario };
+
+/**
+ * An F-14 strike: the drone-defence game played from the jet. Its positions
+ * are metres from the scenario's site, which stays put while the airplane's
+ * local frame moves under the aircraft.
+ */
+interface JetStrike {
+  scenario: StrikeScenario;
+  jet: NonNullable<StrikeScenario["jet"]>;
+  game: StrikeGame;
+  /** Ground over the whole battle area, sampled while it was all in view. */
+  grid: (east: number, north: number) => number;
+  lock: Lock;
+  missiles: number;
+  rounds: number;
+  cooldown: number;
+  gunCooldown: number;
+  status: StrikeStatus;
+}
 
 /** A race in progress: gates fixed on the map, the clock, the recording, the best run to beat. */
 interface ActiveRace {
@@ -130,6 +183,8 @@ const USED_KEYS = new Set([
   "KeyG",
   "BracketLeft",
   "BracketRight",
+  "Space",
+  "KeyE",
 ]);
 /** Where the race plane's smoke comes out, body frame. */
 const SMOKE_NOZZLE: Vec3 = [-4.85, 0, -0.02];
@@ -140,6 +195,12 @@ const JET_NOZZLES: Vec3[] = [
 ];
 /** Seconds a gate burst lasts. */
 const BURST_TIME = 0.7;
+const STRIKE_LAYER = "flight-strike";
+/** The F-14 locks on to a launcher this far away, metres. */
+const JET_LOCK_RANGE = 9000;
+/** Where its missiles leave and its gun fires from, body frame (forward, left, up). */
+const JET_PYLON: Vec3 = [1, 0, -1.4];
+const JET_GUN: Vec3 = [7.5, 0.7, 0];
 
 /** The light airplane: fixed-step physics, cameras, runway starts, instruments and sound. */
 export function createAirplaneSim(
@@ -147,6 +208,7 @@ export function createAirplaneSim(
   deps: {
     panel: PanelBridge;
     race: RaceBridge;
+    strike: StrikeBridge;
     audio: FlightAudio;
     settings: () => FlightSettings;
     airport: Airport;
@@ -193,6 +255,8 @@ export function createAirplaneSim(
     });
   }
   map.addLayer(aircraft.layer);
+  const strikeLayer = createStrikeLayer(STRIKE_LAYER);
+  map.addLayer(strikeLayer.layer);
 
   /**
    * The transform the map renders with. MapLibre 6 keeps it on the map's
@@ -223,9 +287,17 @@ export function createAirplaneSim(
   let bursts: { index: number; at: number; missed: boolean }[] = [];
   /** The countdown second last beeped. */
   let lastBeep = 0;
+  let mission: JetStrike | null = null;
+  /** Fireballs, wreckage, smoke and trails of the strike. */
+  const fx = createStrikeEffects();
+  /** A missile asked for (click or E), fired on the next frame. */
+  let wantFire = false;
+  let bannerSeq = 0;
+  /** Where the camera was last frame: the seeker looks where the screen does. */
+  let lastCamera: CameraPose | null = null;
 
-  const cue = (name: RaceCue) => {
-    if (deps.settings().sound) deps.audio.cue(name);
+  const cue = (name: RaceCue, volume = 1) => {
+    if (deps.settings().sound) deps.audio.cue(name, volume);
   };
   const endLook = () => {
     restoreLook?.();
@@ -246,6 +318,231 @@ export function createAirplaneSim(
   const ground: GroundFn = (east, north) =>
     elevation(toLngLat(origin, east, north));
   const env: Environment = { ground, wind: [0, 0, 0] };
+
+  /** The strike's site in the current local frame: game position = local position − this. */
+  const siteOffset = (m: JetStrike): Vec3 => {
+    const [east, north] = toLocal(origin, m.scenario.site.position);
+    return [east, north, 0];
+  };
+  /** Ground in the strike's frame: loaded tiles, else the grid sampled at the start. */
+  const strikeGround: GroundFn = (east, north) => {
+    if (!mission) return 0;
+    const live = map.queryTerrainElevation(
+      toLngLat(mission.scenario.site.position, east, north),
+    );
+    return live ?? mission.grid(east, north);
+  };
+
+  /** Strike read-outs that change on events only. */
+  const publishStrike = (patch: Partial<StrikeStatus>) => {
+    if (!mission) return;
+    mission.status = { ...mission.status, ...patch };
+    deps.strike.setStatus(mission.status);
+  };
+
+  const onStrikeEvents = (events: StrikeEvent[], camera: Vec3) => {
+    if (!mission || events.length === 0) return;
+    const { game } = mission;
+    fx.onEvents(events, game.time, strikeGround);
+    const volumeAt = (at: Vec3) =>
+      clamp(1 - length(sub(at, camera)) / 9000, 0.08, 1);
+    for (const e of events) {
+      switch (e.kind) {
+        case "wave":
+          publishStrike({
+            phase: "wave",
+            wave: e.index,
+            banner: { kind: "wave", n: e.index, seq: ++bannerSeq },
+          });
+          break;
+        case "wave-clear":
+          if (game.phase === "break")
+            publishStrike({
+              phase: "break",
+              banner: { kind: "clear", n: e.index, seq: ++bannerSeq },
+            });
+          break;
+        case "kill":
+          publishStrike({
+            kills: game.kills,
+            banner: { kind: "kill", n: e.points, seq: ++bannerSeq },
+          });
+          cue("boom", volumeAt(e.at));
+          break;
+        case "burst":
+          cue("boom", volumeAt(e.at) * 0.6);
+          break;
+        case "site-hit":
+          publishStrike({
+            hitsLeft: e.hitsLeft,
+            banner: { kind: "hit", n: e.hitsLeft, seq: ++bannerSeq },
+          });
+          cue("alarm");
+          break;
+        case "launcher-down": {
+          const left = game.launchers.filter((l) => l.alive).length;
+          publishStrike({
+            launchers: { left, total: game.launchers.length },
+            banner: { kind: "launcher", n: left, seq: ++bannerSeq },
+          });
+          cue("boom", 1);
+          cue("gate");
+          break;
+        }
+        case "won":
+        case "lost":
+          publishStrike({
+            phase: e.kind,
+            lostBy: game.lostBy,
+            kills: game.kills,
+            result: { score: scoreStrike(game), medal: null, newBest: false },
+          });
+          cue(e.kind === "won" ? "finish" : "missed");
+          break;
+      }
+    }
+  };
+
+  /** The F-14's weapons and seeker, once a frame. */
+  const strikeWeapons = (m: JetStrike, body: RigidBody, dt: number) => {
+    const { game } = m;
+    if (game.phase === "won" || game.phase === "lost") return;
+    const d = siteOffset(m);
+    const toGame = (p: Vec3) => sub(p, d);
+    // The seeker looks where the screen centre does (the circle on the HUD).
+    if (lastCamera) {
+      const wasLocked = m.lock.locked;
+      stepLock(
+        m.lock,
+        toGame(lastCamera.position),
+        lastCamera.forward,
+        game.launchers.map((l, i) => ({
+          id: i,
+          position: launcherPosition(game, i, strikeGround),
+          alive: l.alive,
+        })),
+        dt,
+        strikeGround,
+        JET_LOCK_RANGE,
+      );
+      if (m.lock.locked && !wasLocked) cue("lock");
+    }
+    m.cooldown = Math.max(0, m.cooldown - dt);
+    m.gunCooldown = Math.max(0, m.gunCooldown - dt);
+    const nose = rotate(body.orientation, [1, 0, 0]);
+    const at = (mount: Vec3) =>
+      toGame(add(body.position, rotate(body.orientation, mount)));
+    if (host.keys.has("Space") && m.rounds > 0 && m.gunCooldown <= 0) {
+      addRound(game, at(JET_GUN), body.velocity, nose);
+      m.rounds -= 1;
+      m.gunCooldown = 1 / GUN.rate;
+      cue("gun", 0.7);
+    }
+    if (wantFire) {
+      wantFire = false;
+      if (m.missiles > 0 && m.cooldown <= 0) {
+        addMissile(
+          game,
+          at(JET_PYLON),
+          body.velocity,
+          nose,
+          null,
+          m.lock.locked && m.lock.target !== null ? m.lock.target : undefined,
+        );
+        m.missiles -= 1;
+        m.cooldown = FIRE_INTERVAL;
+        cue("launch");
+      }
+    }
+  };
+
+  /** Draw the strike and fill in the HUD, from the camera this frame. */
+  const presentStrike = (
+    m: JetStrike,
+    eye: ReturnType<typeof eyeMatrix>,
+    camera: CameraPose,
+    pixelsPerMeter: number,
+  ) => {
+    const { game, lock } = m;
+    const cameraGame = sub(camera.position, siteOffset(m));
+    const fov = map.getVerticalFieldOfView();
+    strikeLayer.show({
+      eye,
+      fov,
+      pixelsPerMeter,
+      light: LOOKS[m.scenario.look].light,
+      ...fx.view(game, cameraGame, strikeGround),
+      thermal: false,
+      navLights: m.scenario.look === "night",
+      time: game.time,
+    });
+    const canvas = map.getCanvas();
+    const aspect = canvas.width / canvas.height;
+    const rel = (p: Vec3) => sub(p, cameraGame);
+    const playing = game.phase === "wave" || game.phase === "break";
+    const boxes: StrikeFrame["boxes"] = [];
+    // Launchers first (the targets), then the drones in the air.
+    let nearest: ReturnType<typeof screenPoint> | null = null;
+    game.launchers.forEach((l, i) => {
+      if (!l.alive) return;
+      const p = screenPoint(
+        eye,
+        rel(launcherPosition(game, i, strikeGround)),
+        fov,
+        aspect,
+      );
+      if (!nearest || p.distance < nearest.distance) nearest = p;
+      if (p.visible && boxes.length < MAX_BOXES)
+        boxes.push({
+          x: p.x,
+          y: p.y,
+          distance: p.distance,
+          state:
+            lock.target === i ? (lock.locked ? "locked" : "locking") : "none",
+          tag: "launcher",
+        });
+    });
+    let closest: number | null = null;
+    for (const t of game.threats) {
+      const toSite = length(sub(t.position, game.spec.site));
+      closest = Math.min(closest ?? Infinity, toSite);
+      const p = screenPoint(eye, rel(t.position), fov, aspect);
+      if (p.visible && boxes.length < MAX_BOXES)
+        boxes.push({
+          x: p.x,
+          y: p.y,
+          distance: p.distance,
+          state: "none",
+          tag: null,
+        });
+    }
+    const arrow = nearest as ReturnType<typeof screenPoint> | null;
+    deps.strike.push({
+      magazine: m.missiles,
+      magazineSize: m.jet.missiles,
+      threatsLeft: threatsLeft(game),
+      breakLeft: game.phase === "break" ? Math.max(0, game.breakLeft) : null,
+      lock: {
+        progress: lock.progress,
+        locked: lock.locked,
+        hunting: lock.target !== null,
+      },
+      cone: (Math.tan(LOCK.cone) / Math.tan((fov * Math.PI) / 360)) * 0.5,
+      boxes,
+      // To the nearest launcher still standing, when it is off screen.
+      arrow:
+        playing && arrow && !arrow.visible
+          ? { angle: arrow.angle, distance: arrow.distance }
+          : null,
+      closest: playing ? closest : null,
+      hunter: null,
+      shake: 0,
+      ammo: m.rounds,
+      ammoSize: m.jet.rounds,
+      pipper: null,
+      jet: true,
+    });
+  };
 
   /** The race gates in the current local frame (the origin moves, the gates do not). */
   const localGates = (): Gate[] =>
@@ -350,6 +647,7 @@ export function createAirplaneSim(
     else
       camera = chaseCamera(chase, pose.position, pose.orientation, dt, ground);
 
+    lastCamera = camera;
     const angles = mapAngles(camera.forward, camera.up);
     map.jumpTo(
       map.calculateCameraOptionsFromCameraLngLatAltRotation(
@@ -464,9 +762,15 @@ export function createAirplaneSim(
       pixelsPerMeter: scale,
       model: plane.frame.id,
       gearDown: plane.gearDown,
-      light: active ? LOOKS[active.course.look].light : undefined,
+      light: active
+        ? LOOKS[active.course.look].light
+        : mission
+          ? LOOKS[mission.scenario.look].light
+          : undefined,
       world,
     });
+    if (mission) presentStrike(mission, eye, camera, scale);
+    else strikeLayer.show(null);
     map.triggerRepaint();
 
     const data = flightData(plane, env);
@@ -554,6 +858,7 @@ export function createAirplaneSim(
   const place = (to: Spawn) => {
     const settings = deps.settings();
     active = null;
+    mission = null;
     endLook();
     for (const t of trails) t.clear();
     bursts = [];
@@ -595,6 +900,75 @@ export function createAirplaneSim(
         },
       };
       deps.race.setStatus(active.status);
+    } else if ("strike" in to) {
+      const scenario = to.strike;
+      const jet = scenario.jet!;
+      startAirborne(
+        jet.start.position,
+        jet.start.height,
+        jet.start.heading,
+        undefined,
+        JET_AIRFRAME,
+      );
+      restoreLook = applyLook(map, scenario.look);
+      const site = scenario.site.position;
+      const siteGround = map.queryTerrainElevation(site) ?? 0;
+      const grid = elevationGrid(
+        (east, north) => map.queryTerrainElevation(toLngLat(site, east, north)),
+        reach(scenario) + 1500,
+        siteGround,
+      );
+      const game = newStrike(
+        {
+          site: [0, 0, siteGround + scenario.site.aim],
+          siteRadius: scenario.site.radius,
+          spawnDistance: scenario.spawnDistance,
+          launchers: scenario.launchers?.map((at) => toLocal(site, at)),
+          waves: scenario.waves,
+          hitsAllowed: jet.hitsAllowed,
+          magazine: 0,
+          rounds: 0,
+          firstBreak: scenario.firstBreak,
+          breakTime: scenario.breakTime,
+        },
+        Math.floor(Math.random() * 1e9),
+      );
+      fx.clear();
+      wantFire = false;
+      const m: JetStrike = {
+        scenario,
+        jet,
+        game,
+        grid,
+        lock: newLock(),
+        missiles: jet.missiles,
+        rounds: jet.rounds,
+        cooldown: 0,
+        gunCooldown: 0,
+        status: {
+          name: scenario.name[deps.locale],
+          site: scenario.site.name[deps.locale],
+          phase: "break",
+          wave: -1,
+          waveCount: scenario.waves.length,
+          hitsLeft: jet.hitsAllowed,
+          hitsAllowed: jet.hitsAllowed,
+          armourLeft: 0,
+          armour: 0,
+          hunters: false,
+          lostBy: null,
+          kills: 0,
+          total: totalThreats(game.spec),
+          banner: null,
+          result: null,
+          launchers: {
+            left: game.launchers.length,
+            total: game.launchers.length,
+          },
+        },
+      };
+      mission = m;
+      deps.strike.setStatus(m.status);
     } else if ("airport" in to) {
       const runway = findRunway(runwayLines(), to.airport.center);
       if (runway) {
@@ -632,6 +1006,10 @@ export function createAirplaneSim(
       }
     }
     if (!active) deps.race.setStatus(null);
+    if (!mission) {
+      deps.strike.setStatus(null);
+      strikeLayer.show(null);
+    }
     previous = plane ? cloneBody(plane.body) : null;
     chase = { position: [0, 0, 0], ready: false };
     fixed.reset();
@@ -646,9 +1024,12 @@ export function createAirplaneSim(
     host.setTravelling(to);
     deps.audio.silence();
     aircraft.show(null);
+    strikeLayer.show(null);
     plane = null;
     active = null;
+    mission = null;
     deps.race.setStatus(null);
+    deps.strike.setStatus(null);
     journeys.start({
       look() {
         // Straight down at the destination, so its elevation, imagery and
@@ -668,6 +1049,28 @@ export function createAirplaneSim(
           map.jumpTo({
             center: fit?.center ?? to.course.start.position,
             zoom: fit?.zoom ?? 12,
+            bearing: 0,
+            pitch: 0,
+            roll: 0,
+          });
+          return;
+        }
+        if ("strike" in to) {
+          // The whole battle area and the jet's start from above, so the terrain under all of it loads.
+          const site = to.strike.site.position;
+          const r = reach(to.strike) + 1500;
+          const start = to.strike.jet!.start.position;
+          const [sw, ne] = [toLngLat(site, -r, -r), toLngLat(site, r, r)];
+          const fit = map.cameraForBounds(
+            [
+              [Math.min(sw[0], start[0]), Math.min(sw[1], start[1])],
+              [Math.max(ne[0], start[0]), Math.max(ne[1], start[1])],
+            ],
+            { padding: 40, maxZoom: 12 },
+          );
+          map.jumpTo({
+            center: fit?.center ?? site,
+            zoom: fit?.zoom ?? 11,
             bearing: 0,
             pitch: 0,
             roll: 0,
@@ -713,6 +1116,7 @@ export function createAirplaneSim(
         const keys = held();
         const current = plane;
         const gates = localGates();
+        const strikeEvents: StrikeEvent[] = [];
         alpha = fixed.advance(dt, (h) => {
           previous = cloneBody(current.body);
           if (active?.race.phase === "countdown") {
@@ -739,6 +1143,8 @@ export function createAirplaneSim(
             env,
             h,
           );
+          if (mission && !current.crashed)
+            strikeEvents.push(...stepStrike(mission.game, strikeGround, h));
           if (active && !current.crashed) {
             onRaceEvents(
               stepRace(
@@ -793,6 +1199,14 @@ export function createAirplaneSim(
         }
         env.ground = ground;
         if (plane.crashed) host.setCrash(plane.crashed);
+        if (mission) {
+          if (!plane.crashed) strikeWeapons(mission, plane.body, dt);
+          fx.step(dt, mission.game.time, strikeGround);
+          onStrikeEvents(
+            strikeEvents,
+            sub(plane.body.position, siteOffset(mission)),
+          );
+        }
 
         // Keep the numbers small: move the origin under the aircraft now and then.
         const [east, north] = plane.body.position;
@@ -834,6 +1248,8 @@ export function createAirplaneSim(
         ) {
           // Gear lever; not while sitting on the wheels.
           plane.gearCommand = !plane.gearCommand;
+        } else if (event.code === "KeyE") {
+          wantFire = true;
         } else if (event.code === "KeyX") {
           smokeOn = !smokeOn;
           for (const t of trails) t.cut();
@@ -850,6 +1266,14 @@ export function createAirplaneSim(
 
     keyUp() {
       host.wake();
+    },
+
+    mouseDown(button) {
+      // In a strike, a left click fires a missile.
+      if (button === 0 && mission) {
+        wantFire = true;
+        host.wake();
+      }
     },
 
     mouseMove(dx, dy, buttons) {
@@ -875,6 +1299,10 @@ export function createAirplaneSim(
       travel({ course });
     },
 
+    startStrike(scenario) {
+      travel({ strike: scenario });
+    },
+
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -884,10 +1312,13 @@ export function createAirplaneSim(
       host.setCrash(null);
       host.setTravelling(null);
       active = null;
+      mission = null;
       deps.race.setStatus(null);
+      deps.strike.setStatus(null);
       endLook();
       try {
         if (map.getLayer(AIRCRAFT_LAYER)) map.removeLayer(AIRCRAFT_LAYER);
+        if (map.getLayer(STRIKE_LAYER)) map.removeLayer(STRIKE_LAYER);
         if (map.getLayer(AEROWAY_LAYER)) map.removeLayer(AEROWAY_LAYER);
         transform().clearNearFarZOverride();
         map.setCenterClampedToGround(true);

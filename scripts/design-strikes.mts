@@ -3,7 +3,7 @@
  * DEM, so nothing is placed from memory.
  *
  *   node --no-warnings scripts/design-strikes.mts overview <lng> <lat> [zoom] [name]
- *   node --no-warnings scripts/design-strikes.mts
+ *   node --no-warnings scripts/design-strikes.mts [check <scenario id>]
  *
  * `overview` draws satellite tiles around a point with a labelled lng/lat
  * grid (for reading guide points off the imagery). With no arguments it
@@ -17,6 +17,7 @@ import sharp from "sharp";
 import { TILE_SERVER_URL } from "../src/config/map.ts";
 import {
   ahead,
+  bearing,
   dist,
   type LngLat,
   loadDem,
@@ -144,7 +145,9 @@ if (args[0] === "overview") {
   await overview(args[4] ?? "overview", at, Number(args[3] ?? 13));
 } else {
   const { STRIKES } = await import("../src/config/strikes.ts");
-  for (const s of STRIKES) {
+  // `check <id>` runs one scenario; no arguments runs them all.
+  const only = args[0] === "check" ? args[1] : undefined;
+  for (const s of STRIKES.filter((x) => !only || x.id === only)) {
     const dem = await loadDem(s.site.position, 12_000);
     const ground = dem.elev(s.site.position);
     console.log(`${s.id}: site ground ${Math.round(ground)} m`);
@@ -166,8 +169,15 @@ if (args[0] === "overview") {
       },
       { at: s.start.position, label: "start", colour: "#2cc4ae" },
     ];
+    s.launchers?.forEach((at, i) => {
+      console.log(
+        `  launcher ${i}: ${Math.round(dist(s.site.position, at))} m from the site at ${Math.round(bearing(s.site.position, at))}°, ground ${Math.round(dem.elev(at))} m`,
+      );
+      marks.push({ at, label: `L${i}`, colour: "#ff8a2a" });
+    });
     s.waves.forEach((wave, w) => {
       for (const group of wave.groups) {
+        if (group.launcher !== undefined) continue;
         const spawn = ahead(s.site.position, group.from, s.spawnDistance);
         // Highest ground on the straight line in, and the height the drones cruise at above it.
         let top = -Infinity;
@@ -196,6 +206,16 @@ if (args[0] === "overview") {
         site: [0, 0, ground + s.site.aim],
         siteRadius: s.site.radius,
         spawnDistance: s.spawnDistance,
+        launchers: s.launchers?.map((at) => {
+          const [e, n] = [
+            (at[0] - s.site.position[0]) *
+              RAD *
+              R *
+              Math.cos(s.site.position[1] * RAD),
+            (at[1] - s.site.position[1]) * RAD * R,
+          ];
+          return [e, n] as [number, number];
+        }),
         waves: s.waves,
         hitsAllowed: 999,
         playerHits: 999,

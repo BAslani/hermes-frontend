@@ -30,11 +30,13 @@ export interface StrikeStatus {
   /** A notice to flash; `seq` changes each time so the same one can flash again. */
   /** For a kill, `n` is the points; for a hit or damage, what is left. */
   banner: {
-    kind: "wave" | "clear" | "hit" | "kill" | "decoy" | "damage";
+    kind: "wave" | "clear" | "hit" | "kill" | "decoy" | "damage" | "launcher";
     n: number;
     seq: number;
   } | null;
   result: { score: StrikeScore; medal: StrikeMedal; newBest: boolean } | null;
+  /** Launchers still standing, of how many: shown when they are targets (the F-14's strike). */
+  launchers?: { left: number; total: number };
 }
 
 /** Most target boxes drawn. */
@@ -56,7 +58,7 @@ export interface StrikeFrame {
     y: number;
     distance: number;
     state: "locked" | "locking" | "none";
-    tag: "jet" | "hunter" | "decoy" | null;
+    tag: "jet" | "hunter" | "decoy" | "launcher" | null;
   }[];
   /** The drone nearest the site, when it is off screen: which way, and how far from the player. */
   arrow: { angle: number; distance: number } | null;
@@ -71,6 +73,8 @@ export interface StrikeFrame {
   ammoSize: number;
   /** Where to aim the gun to hit the drone nearest the crosshair, x and y from -1 to 1. */
   pipper: { x: number; y: number } | null;
+  /** Flown from the F-14: its missiles do not refill between waves. */
+  jet?: boolean;
 }
 
 export interface StrikeBridge {
@@ -233,7 +237,9 @@ export function StrikeHud({
       if (lockRef.current) {
         lockRef.current.textContent =
           frame.magazine === 0
-            ? t.empty
+            ? frame.jet
+              ? t.jetEmpty
+              : t.empty
             : frame.lock.locked
               ? t.locked
               : frame.lock.hunting
@@ -358,6 +364,19 @@ export function StrikeHud({
                 ))}
               </div>
             </div>
+            {status.launchers && (
+              <div className="mt-1 flex items-center justify-end gap-2 text-xs text-night-body">
+                {t.launchers}
+                <div className="flex gap-1" aria-label={t.launchers}>
+                  {Array.from({ length: status.launchers.total }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`h-2.5 w-4 rounded-sm ${i < (status.launchers?.left ?? 0) ? "bg-[#ff8a2a]" : "bg-white/15"}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
             {status.hunters && (
               <div className="mt-1 flex items-center justify-end gap-2 text-xs text-night-body">
                 {t.armour}
@@ -396,7 +415,7 @@ export function StrikeHud({
               ref={(el) => {
                 boxRefs.current[i] = el;
               }}
-              className="absolute hidden -translate-x-1/2 -translate-y-1/2 border-2 border-white/60 data-[tag=decoy]:border-dashed data-[tag=decoy]:border-white/35 data-[tag=hunter]:border-sky-300 data-[state=locked]:border-red-500 data-[state=locking]:border-[#ffb547]"
+              className="absolute hidden -translate-x-1/2 -translate-y-1/2 border-2 border-white/60 data-[tag=decoy]:border-dashed data-[tag=decoy]:border-white/35 data-[tag=hunter]:border-sky-300 data-[tag=launcher]:border-[#ff8a2a] data-[state=locked]:border-red-500 data-[state=locking]:border-[#ffb547]"
             >
               <span
                 dir="ltr"
@@ -492,7 +511,9 @@ export function StrikeHud({
                 ? "bg-red-600/90 text-lg text-white uppercase"
                 : banner.kind === "kill"
                   ? "bg-night/70 text-base text-[#ffcf8a]"
-                  : "bg-night/80 text-lg text-white"
+                  : banner.kind === "launcher"
+                    ? "bg-[#ff8a2a]/90 text-lg text-night"
+                    : "bg-night/80 text-lg text-white"
             }`}
           >
             {banner.kind === "wave"
@@ -507,7 +528,14 @@ export function StrikeHud({
                     ? t.damage.replace("{n}", plain.format(banner.n))
                     : banner.kind === "decoy"
                       ? t.decoyDown
-                      : `+${plain.format(banner.n)}`}
+                      : banner.kind === "launcher"
+                        ? banner.n > 0
+                          ? t.launcherDown.replace(
+                              "{n}",
+                              plain.format(banner.n),
+                            )
+                          : t.lastLauncher
+                        : `+${plain.format(banner.n)}`}
           </span>
         </div>
       )}

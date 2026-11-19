@@ -52,6 +52,8 @@ export interface StrikeView {
   fire: PuffData | null;
   /** The defended site: a ring at the height the drones aim for, coloured by what is left of it. */
   site: { offset: Vec3; radius: number; health: number } | null;
+  /** Drone launchers on the ground, camera-relative, each facing the way its drones leave. */
+  launchers: { offset: Vec3; forward: Vec3 }[];
 }
 
 export interface StrikeLayer {
@@ -59,7 +61,7 @@ export interface StrikeLayer {
   show(view: StrikeView | null): void;
 }
 
-export const MAX_TRAIL_PUFFS = 1600;
+export const MAX_TRAIL_PUFFS = 3200;
 export const MAX_SMOKE_PUFFS = 1600;
 export const MAX_DEBRIS = 400;
 export const MAX_TRACERS = 120;
@@ -68,6 +70,7 @@ const MAX_THREATS = 32;
 /** Jets and hunters drawn at once (each model has its own pool). */
 const MAX_SPECIAL = 16;
 const MAX_MISSILES = 24;
+const MAX_LAUNCHERS = 8;
 
 /** A delta-wing attack drone about 2.5 m across, built along +x (nose), y left, z up. */
 function droneGeometry() {
@@ -230,6 +233,30 @@ function missileGeometry() {
     fin.rotateX((i * Math.PI) / 2);
     parts.push(fin);
   }
+  return parts;
+}
+
+/** A drone launcher: a six-wheel truck with its rail raised at the launch angle, rail end forward. */
+function launcherGeometry() {
+  const parts: THREE.BufferGeometry[] = [];
+  const bed = new THREE.BoxGeometry(7, 2.4, 1.1);
+  bed.translate(-0.6, 0, 1.3);
+  parts.push(bed);
+  const cab = new THREE.BoxGeometry(1.8, 2.4, 1.6);
+  cab.translate(3.6, 0, 1.6);
+  parts.push(cab);
+  for (const x of [3.4, -1.6, -3.2])
+    for (const y of [1.1, -1.1]) {
+      const wheel = new THREE.CylinderGeometry(0.55, 0.55, 0.4, 12);
+      wheel.translate(x, y, 0.55);
+      parts.push(wheel);
+    }
+  // The rail, 6 m long, pivoting at the back of the bed and pointing up and forward at 35°.
+  const rail = new THREE.BoxGeometry(6, 0.5, 0.35);
+  rail.translate(3, 0, 0);
+  rail.rotateY((-35 * Math.PI) / 180);
+  rail.translate(-3.8, 0, 2.1);
+  parts.push(rail);
   return parts;
 }
 
@@ -433,6 +460,32 @@ export function createStrikeLayer(id: string): StrikeLayer {
   beam.matrixAutoUpdate = false;
   beam.visible = false;
   scene.add(beam);
+  // Launchers: the truck model, and an orange beam over each so it can be found from afar.
+  const launcherParts = launcherGeometry();
+  const launcherMaterial = new THREE.MeshStandardMaterial({
+    color: 0x5a5a3c,
+    roughness: 0.85,
+  });
+  const launcherBeamMaterial = new THREE.MeshBasicMaterial({
+    color: 0xff8a2a,
+    transparent: true,
+    opacity: 0.16,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const launcherPool = Array.from({ length: MAX_LAUNCHERS }, () => {
+    const truck = new THREE.Group();
+    for (const g of launcherParts)
+      truck.add(new THREE.Mesh(g, launcherMaterial));
+    const beam = new THREE.Mesh(beamGeometry, launcherBeamMaterial);
+    for (const o of [truck, beam]) {
+      o.matrixAutoUpdate = false;
+      o.visible = false;
+      scene.add(o);
+    }
+    return { truck, beam };
+  });
   const healthy = new THREE.Color(0x2cc4ae);
   const hurt = new THREE.Color(0xffb547);
   const lost = new THREE.Color(0xff4d4d);
@@ -477,6 +530,7 @@ export function createStrikeLayer(id: string): StrikeLayer {
         navGeometry,
         siteGeometry,
         beamGeometry,
+        ...launcherParts,
       ])
         g.dispose();
       for (const m of [
@@ -489,6 +543,8 @@ export function createStrikeLayer(id: string): StrikeLayer {
         missileMaterial,
         siteMaterial,
         beamMaterial,
+        launcherMaterial,
+        launcherBeamMaterial,
       ])
         m.dispose();
       for (const c of [trails, smoke, fire]) disposeSmoke(c);
@@ -593,6 +649,15 @@ export function createStrikeLayer(id: string): StrikeLayer {
         place(siteRing, eye, [r, 0, 0], [0, r, 0], [0, 0, 1], site.offset);
         place(beam, eye, [3, 0, 0], [0, 0, 600], [0, -3, 0], site.offset);
       }
+      launcherPool.forEach(({ truck, beam }, i) => {
+        const l = current.launchers[i];
+        truck.visible = beam.visible = Boolean(l);
+        if (!l) return;
+        placeAlong(truck, eye, l.forward, l.offset);
+        // Wider with distance, so it stays a few pixels across (2 m up close, 15 m at 7 km).
+        const r = Math.max(2, Math.hypot(...l.offset) * 0.002);
+        place(beam, eye, [r, 0, 0], [0, 0, 400], [0, -r, 0], l.offset);
+      });
 
       camera.fov = current.fov;
       camera.aspect = canvas.width / canvas.height;

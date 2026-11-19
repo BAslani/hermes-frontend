@@ -118,6 +118,12 @@ export function PlaygroundCard({
               ...(settings.aircraft === "jet"
                 ? [{ keys: ["G"], action: t.aircraft.gear }]
                 : []),
+              // Strike missions only (always flown in the F-14).
+              {
+                keys: [t.strike.click, "E"],
+                action: t.jetStrike.controls.fire,
+              },
+              { keys: ["Space"], action: t.jetStrike.controls.gun },
               { keys: ["X"], action: t.race.controls.smoke },
               { keys: ["C"], action: a.camera },
               { keys: [t.airplane.mouseRight], action: a.orbit },
@@ -362,6 +368,43 @@ export function PlaygroundCard({
             )}
             {vehicle === "airplane" && (
               <>
+                <h2 className={heading}>{t.jetStrike.title}</h2>
+                <p className="mb-2 text-xs text-night-muted">
+                  {t.jetStrike.intro}
+                </p>
+                <ul className="mb-6 grid gap-1 text-sm">
+                  {STRIKES.filter((scenario) => scenario.jet).map(
+                    (scenario) => (
+                      <li key={scenario.id}>
+                        <button
+                          type="button"
+                          disabled={touchOnly}
+                          onClick={() => onStrike(scenario)}
+                          className={`${row} items-start`}
+                        >
+                          <span aria-hidden className="mt-0.5 text-[#ff8a2a]">
+                            ✈
+                          </span>
+                          <span className="grid gap-0.5">
+                            <span className="font-medium text-white">
+                              {scenario.name[locale]}
+                            </span>
+                            <span className="text-xs text-night-muted">
+                              {t.jetStrike.brief
+                                .replace(
+                                  "{n}",
+                                  number.format(
+                                    scenario.launchers?.length ?? 0,
+                                  ),
+                                )
+                                .replace("{site}", scenario.site.name[locale])}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    ),
+                  )}
+                </ul>
                 <h2 className={heading}>{t.race.title}</h2>
                 <p className="mb-2 text-xs text-night-muted">
                   {t.race.intro.replace(

@@ -139,6 +139,12 @@ export function PlaygroundPage({
     () => raceBridge.status() !== null,
     () => false,
   );
+  /** An F-14 strike is on (the airplane game): flown in the jet, with its dials. */
+  const striking = useSyncExternalStore(
+    strikeBridge.subscribe,
+    () => strikeBridge.status() !== null,
+    () => false,
+  );
 
   const setStatus = useCallback((next: Status) => {
     statusRef.current = next;
@@ -290,6 +296,7 @@ export function PlaygroundPage({
         ? createAirplaneSim(host, {
             panel,
             race: raceBridge,
+            strike: strikeBridge,
             audio,
             settings: getSettings,
             airport: airportRef.current,
@@ -645,7 +652,7 @@ export function PlaygroundPage({
               ? "heli"
               : racing
                 ? "race"
-                : settings.aircraft === "jet"
+                : striking || settings.aircraft === "jet"
                   ? "jet"
                   : "light"
           }
@@ -662,14 +669,16 @@ export function PlaygroundPage({
           dir={dir}
         />
       )}
-      {loaded && vehicle === "strike" && !travelling && (
-        <StrikeHud
-          bridge={strikeBridge}
-          locale={locale}
-          t={t.strike}
-          dir={dir}
-        />
-      )}
+      {loaded &&
+        (vehicle === "strike" || vehicle === "airplane") &&
+        !travelling && (
+          <StrikeHud
+            bridge={strikeBridge}
+            locale={locale}
+            t={t.strike}
+            dir={dir}
+          />
+        )}
 
       {crash && flying && (
         <div

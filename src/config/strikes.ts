@@ -23,6 +23,19 @@ export interface StrikeScenario {
   start: { position: LngLat; heading: number; height: number };
   /** Drones appear this far from the site, metres. */
   spawnDistance: number;
+  /** Launchers on the ground that wave groups with `launcher` take off from, by index. */
+  launchers?: LngLat[];
+  /**
+   * The F-14's strike on the launchers, flown from the airplane game: where it
+   * starts (in level flight, `height` metres above the ground), what it carries,
+   * and the hits the site takes with nobody defending it (solo only).
+   */
+  jet?: {
+    start: { position: LngLat; heading: number; height: number };
+    missiles: number;
+    rounds: number;
+    hitsAllowed: number;
+  };
   waves: { groups: WaveGroup[] }[];
   hitsAllowed: number;
   /** Hits the interceptor takes from hunters (default 3). */
@@ -133,6 +146,124 @@ export const STRIKES: StrikeScenario[] = [
     firstBreak: 6,
     breakTime: 10,
     // Most: 2400 for the drones, 1000 for an untouched dam, 500 for accuracy.
+    medals: { gold: 3550, silver: 3000, bronze: 2250 },
+    look: "day",
+  },
+  {
+    id: "karaj-launchers",
+    name: { en: "Karaj dam: launch sites" },
+    brief: {
+      en: "The drones now take off from four launchers in the valleys around the Amir Kabir dam, the orange beams. Three waves; the dam takes four hits.",
+    },
+    // The same dam and start as "Hold the Karaj dam".
+    site: {
+      position: [51.0907, 35.9564],
+      radius: 150,
+      aim: 15,
+      name: { en: "Amir Kabir dam" },
+    },
+    start: { position: [51.0905, 35.9515], heading: 15, height: 500 },
+    spawnDistance: 5500,
+    // Read off the z12 overview; every wave flown on the DEM reaches the dam (scripts/design-strikes.mts check karaj-launchers):
+    // 0 the reservoir road to the north-east, 1 the orchards to the south-east,
+    // 2 the Karaj river road to the south-west, 3 the river valley to the north-west.
+    launchers: [
+      [51.125, 36.0],
+      [51.114, 35.913],
+      [51.045, 35.913],
+      [51.0226, 35.985],
+    ],
+    // 12 km south of the dam at 1500 m, heading north up the Karaj valley. Two
+    // missiles or about fifty rounds destroy a launcher: eight missiles and the
+    // M61's 675 rounds. Alone, nobody stops the drones already up, so the dam
+    // takes twelve hits instead of four.
+    jet: {
+      start: { position: [51.0907, 35.8483], heading: 0, height: 1500 },
+      missiles: 8,
+      rounds: 675,
+      hitsAllowed: 12,
+    },
+    waves: [
+      {
+        groups: [
+          {
+            launcher: 0,
+            from: 36,
+            spread: 0,
+            count: 5,
+            interval: 6,
+            speed: 46,
+            cruise: 90,
+            weave: 12,
+          },
+        ],
+      },
+      {
+        groups: [
+          {
+            launcher: 2,
+            from: 220,
+            spread: 0,
+            count: 4,
+            interval: 5,
+            speed: 50,
+            cruise: 80,
+            weave: 10,
+          },
+          {
+            launcher: 1,
+            from: 156,
+            spread: 0,
+            count: 3,
+            interval: 5,
+            delay: 8,
+            speed: 50,
+            cruise: 110,
+            weave: 15,
+          },
+        ],
+      },
+      {
+        groups: [
+          {
+            launcher: 3,
+            from: 297,
+            spread: 0,
+            count: 5,
+            interval: 3.5,
+            speed: 55,
+            cruise: 70,
+            weave: 15,
+          },
+          {
+            launcher: 0,
+            from: 36,
+            spread: 0,
+            count: 4,
+            interval: 4,
+            delay: 6,
+            speed: 60,
+            cruise: 80,
+            weave: 8,
+          },
+          {
+            launcher: 1,
+            from: 156,
+            spread: 0,
+            count: 3,
+            interval: 3.5,
+            delay: 12,
+            speed: 55,
+            cruise: 80,
+            weave: 20,
+          },
+        ],
+      },
+    ],
+    hitsAllowed: 4,
+    magazine: 14,
+    firstBreak: 6,
+    breakTime: 10,
     medals: { gold: 3550, silver: 3000, bronze: 2250 },
     look: "day",
   },

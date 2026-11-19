@@ -105,6 +105,18 @@ export const en = {
         pause: "Pause",
       },
     },
+    jetStrike: {
+      title: "Strike missions",
+      intro:
+        "Fly the F-14 against the drone launchers before their drones destroy the target. Hold a launcher in the circle to lock on.",
+      brief:
+        "Destroy {n} drone launchers before their drones destroy {site}. Flown in the F-14.",
+      gettingReady: "Getting {mission} ready",
+      controls: {
+        fire: "Fire a missile at the locked launcher",
+        gun: "Gun (hold)",
+      },
+    },
     race: {
       title: "Air races",
       intro:
@@ -224,7 +236,11 @@ export const en = {
       damage: "Interceptor hit! {n} left",
       decoyDown: "Decoy: no points",
       hunterWarning: "Hunter drone {d} away!",
-      tags: { jet: "JET", hunter: "HNT", decoy: "DCY" },
+      tags: { jet: "JET", hunter: "HNT", decoy: "DCY", launcher: "LNCH" },
+      launchers: "Launchers",
+      launcherDown: "Launcher destroyed! {n} left",
+      lastLauncher: "Last launcher destroyed!",
+      jetEmpty: "Out of missiles: use the gun",
       score: {
         kills: "Drones down",
         site: "Site intact",
