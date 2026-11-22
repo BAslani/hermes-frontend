@@ -12,6 +12,8 @@ export interface FlightSettings {
   windKnots: number;
   /** What free flight is flown in (races always use the race plane). */
   aircraft: "trainer" | "jet";
+  /** Realistic flight physics, or arcade: faster, nose-pointing action-game handling. */
+  gameplay: "realistic" | "arcade";
   /** Co-op launcher missions: a stand-in partner flies the other aircraft. */
   partner: boolean;
 }
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: FlightSettings = {
   windFrom: 270,
   windKnots: 0,
   aircraft: "trainer",
+  gameplay: "realistic",
   partner: false,
 };
 
@@ -54,6 +57,7 @@ function loadSettings(): FlightSettings {
         MAX_WIND_KNOTS,
       ),
       aircraft: stored.aircraft === "jet" ? "jet" : "trainer",
+      gameplay: stored.gameplay === "arcade" ? "arcade" : "realistic",
       partner: bool(stored.partner, DEFAULT_SETTINGS.partner),
     };
   } catch {

@@ -26,6 +26,16 @@ import {
   windVector,
 } from "@/lib/flight/airplane";
 import {
+  ARCADE_TIME_SCALE,
+  type ArcadeInput,
+  arcadeThrottle,
+  stepArcade,
+  toArcade,
+} from "@/lib/flight/arcade";
+import {
+  type ArcadeCameraRig,
+  type ArcadeCameraState,
+  arcadeCamera,
   CAMERA_MODES,
   type CameraMode,
   type CameraPose,
@@ -85,6 +95,7 @@ import {
   LAUNCHER,
   LOCK,
   type Lock,
+  type LockRules,
   launcherPosition,
   newLock,
   newStrike,
@@ -93,11 +104,23 @@ import {
   scoreStrike,
   stepLock,
   stepStrike,
+  switchLock,
   threatsLeft,
   totalThreats,
 } from "@/lib/flight/strike";
 import { Trail } from "@/lib/flight/trail";
-import { add, clamp, length, rotate, sub, type Vec3 } from "@/lib/flight/vec";
+import {
+  add,
+  clamp,
+  cross,
+  dot,
+  length,
+  normalize,
+  rotate,
+  scale,
+  sub,
+  type Vec3,
+} from "@/lib/flight/vec";
 import type { FlightAudio, RaceCue } from "../flight-audio";
 import type { PanelBridge } from "../InstrumentPanel";
 import type { RaceBridge, RaceStatus } from "../RaceHud";
@@ -193,6 +216,7 @@ const USED_KEYS = new Set([
   "BracketRight",
   "Space",
   "KeyE",
+  "KeyQ",
 ]);
 /** Where the race plane's smoke comes out, body frame. */
 const SMOKE_NOZZLE: Vec3 = [-4.85, 0, -0.02];
@@ -209,9 +233,31 @@ const JET_LOCK_RANGE = 9000;
 /** Lock ids for launchers are below zero (−1 for launcher 0), so they never meet a drone's id. */
 const launcherLockId = (index: number) => -1 - index;
 const lockedLauncher = (id: number) => -1 - id;
+/** The F-14's seeker: realistic, and arcade's wider, quicker one. */
+const JET_LOCK: Record<FlightSettings["gameplay"], LockRules> = {
+  realistic: { ...LOCK, range: JET_LOCK_RANGE },
+  arcade: {
+    cone: 12 * (Math.PI / 180),
+    keep: 30 * (Math.PI / 180),
+    time: 0.6,
+    range: JET_LOCK_RANGE,
+  },
+};
 /** Where its missiles leave and its gun fires from, body frame (forward, left, up). */
 const JET_PYLON: Vec3 = [1, 0, -1.4];
 const JET_GUN: Vec3 = [7.5, 0.7, 0];
+/**
+ * Arcade pointer: radians it moves per pixel of mouse movement, and how far
+ * ahead of the nose it may run (the aircraft is always catching up to it).
+ */
+const AIM_SENSITIVITY = 0.0012;
+const AIM_REACH = 35 * (Math.PI / 180);
+/** Where the arcade camera sits behind each aircraft, metres. */
+const ARCADE_RIG: Record<Airframe["id"], ArcadeCameraRig> = {
+  jet: { back: 30, up: 6.5, lead: 45 },
+  racer: { back: 15, up: 3.5, lead: 25 },
+  trainer: { back: 17, up: 4, lead: 25 },
+};
 
 /** The light airplane: fixed-step physics, cameras, runway starts, instruments and sound. */
 export function createAirplaneSim(
@@ -310,6 +356,12 @@ export function createAirplaneSim(
   const fx = createStrikeEffects();
   /** A missile asked for (click or E), fired on the next frame. */
   let wantFire = false;
+  /** A lock switch asked for (Q or the middle button), done on the next frame. */
+  let wantSwitch = false;
+  /** The arcade camera trailing the aircraft's attitude. */
+  const arcadeCam: ArcadeCameraState = { orientation: null };
+  /** Arcade: the pointer, a world direction the aircraft flies to (east-north-up). */
+  let aim: Vec3 = [0, 1, 0];
   let bannerSeq = 0;
   /** Where the camera was last frame: the seeker looks where the screen does. */
   let lastCamera: CameraPose | null = null;
@@ -440,6 +492,18 @@ export function createAirplaneSim(
     }
   };
 
+  const arcade = () => deps.settings().gameplay === "arcade";
+  const lockRules = () => JET_LOCK[deps.settings().gameplay];
+  /** What the F-14's seeker can lock on to: the launchers, then the drones in the air. */
+  const lockTargets = (m: JetStrike) => [
+    ...m.game.launchers.map((l, i) => ({
+      id: launcherLockId(i),
+      position: launcherPosition(m.game, i, strikeGround),
+      alive: l.alive,
+    })),
+    ...m.game.threats,
+  ];
+
   /** The F-14's weapons and seeker, once a frame. */
   const strikeWeapons = (m: JetStrike, body: RigidBody, dt: number) => {
     const { game } = m;
@@ -449,24 +513,31 @@ export function createAirplaneSim(
     // The seeker looks where the screen centre does (the circle on the HUD).
     if (lastCamera) {
       const wasLocked = m.lock.locked;
+      const eye = toGame(lastCamera.position);
+      if (
+        wantSwitch &&
+        switchLock(
+          m.lock,
+          eye,
+          lastCamera.forward,
+          lockTargets(m),
+          strikeGround,
+          lockRules(),
+        )
+      )
+        cue("count", 0.5);
       stepLock(
         m.lock,
-        toGame(lastCamera.position),
+        eye,
         lastCamera.forward,
-        [
-          ...game.launchers.map((l, i) => ({
-            id: launcherLockId(i),
-            position: launcherPosition(game, i, strikeGround),
-            alive: l.alive,
-          })),
-          ...game.threats,
-        ],
+        lockTargets(m),
         dt,
         strikeGround,
-        JET_LOCK_RANGE,
+        lockRules(),
       );
       if (m.lock.locked && !wasLocked) cue("lock");
     }
+    wantSwitch = false;
     m.cooldown = Math.max(0, m.cooldown - dt);
     m.gunCooldown = Math.max(0, m.gunCooldown - dt);
     const nose = rotate(body.orientation, [1, 0, 0]);
@@ -626,7 +697,8 @@ export function createAirplaneSim(
         locked: lock.locked,
         hunting: lock.target !== null,
       },
-      cone: (Math.tan(LOCK.cone) / Math.tan((fov * Math.PI) / 360)) * 0.5,
+      cone:
+        (Math.tan(lockRules().cone) / Math.tan((fov * Math.PI) / 360)) * 0.5,
       boxes,
       // To the nearest launcher still standing, when it is off screen.
       arrow:
@@ -728,6 +800,114 @@ export function createAirplaneSim(
     brake: host.keys.has("KeyB"),
   });
 
+  /**
+   * Arcade controls: the mouse moves the pointer and the aircraft eases round
+   * to follow it; A/D yaw, W boost, S air brake, both together a high-G turn.
+   */
+  const arcadeInput = (): ArcadeInput => ({
+    aim,
+    pitch: 0,
+    roll: 0,
+    yaw: pilot.rudder,
+    boost: host.keys.has("KeyW"),
+    brake: host.keys.has("KeyS"),
+  });
+
+  /** Keep the pointer within AIM_REACH of the nose, so it never runs away from the aircraft. */
+  const reinAim = (nose: Vec3) => {
+    const c = clamp(dot(aim, nose), -1, 1);
+    if (c >= Math.cos(AIM_REACH)) return;
+    const across = sub(aim, scale(nose, c));
+    const side =
+      length(across) > 1e-6
+        ? normalize(across)
+        : normalize(cross(nose, [0, 0, 1]));
+    aim = add(
+      scale(nose, Math.cos(AIM_REACH)),
+      scale(side, Math.sin(AIM_REACH)),
+    );
+  };
+
+  /** Mouse moved by (dx, dy) pixels: the pointer moves that way across the screen. */
+  const moveAim = (dx: number, dy: number) => {
+    if (!lastCamera || !plane) return;
+    const right = normalize(cross(lastCamera.forward, lastCamera.up));
+    const up = normalize(cross(right, lastCamera.forward));
+    aim = normalize(
+      add(
+        aim,
+        add(
+          scale(right, dx * AIM_SENSITIVITY),
+          scale(up, -dy * AIM_SENSITIVITY),
+        ),
+      ),
+    );
+    reinAim(rotate(plane.body.orientation, [1, 0, 0]));
+  };
+
+  /** The pointer's circle and the gun cross where the nose points, arcade only. */
+  const marks = (() => {
+    const make = (css: string) => {
+      const el = document.createElement("div");
+      el.setAttribute("aria-hidden", "true");
+      el.style.cssText = `position:absolute;left:0;top:0;pointer-events:none;z-index:5;display:none;transform:translate(-50%,-50%);${css}`;
+      map.getContainer().appendChild(el);
+      return el;
+    };
+    const pointer = make(
+      "width:30px;height:30px;border:2px solid rgba(110,255,170,.85);border-radius:50%;box-shadow:0 0 5px rgba(0,0,0,.45);",
+    );
+    const nose = make(
+      "width:16px;height:16px;background:linear-gradient(rgba(110,255,170,.9),rgba(110,255,170,.9)) center/100% 2px no-repeat,linear-gradient(rgba(110,255,170,.9),rgba(110,255,170,.9)) center/2px 100% no-repeat;",
+    );
+    const place = (el: HTMLDivElement, p: ReturnType<typeof screenPoint>) => {
+      if (!p.visible) {
+        el.style.display = "none";
+        return;
+      }
+      const { clientWidth: w, clientHeight: h } = map.getContainer();
+      el.style.display = "block";
+      el.style.left = `${((p.x + 1) / 2) * w}px`;
+      el.style.top = `${((1 - p.y) / 2) * h}px`;
+    };
+    return {
+      show(
+        view: {
+          eye: ReturnType<typeof eyeMatrix>;
+          camera: Vec3;
+          aircraft: Vec3;
+          nose: Vec3;
+        } | null,
+      ) {
+        if (!view) {
+          pointer.style.display = "none";
+          nose.style.display = "none";
+          return;
+        }
+        const fov = map.getVerticalFieldOfView();
+        const canvas = map.getCanvas();
+        const aspect = canvas.width / canvas.height;
+        const far = (from: Vec3, dir: Vec3) =>
+          sub(
+            add(from, [dir[0] * 3000, dir[1] * 3000, dir[2] * 3000]),
+            view.camera,
+          );
+        place(
+          pointer,
+          screenPoint(view.eye, far(view.aircraft, aim), fov, aspect),
+        );
+        place(
+          nose,
+          screenPoint(view.eye, far(view.aircraft, view.nose), fov, aspect),
+        );
+      },
+      remove() {
+        pointer.remove();
+        nose.remove();
+      },
+    };
+  })();
+
   /** Point the map camera and the three.js layer at the aircraft, and refresh the read-outs. */
   const present = (dt: number, alpha: number) => {
     if (!plane || !previous) return;
@@ -743,6 +923,15 @@ export function createAirplaneSim(
       camera = cockpitCamera(pose.position, pose.orientation, eyePoint);
     else if (mode === "orbit")
       camera = orbitCamera(orbit, pose.position, ground);
+    else if (arcade())
+      camera = arcadeCamera(
+        arcadeCam,
+        pose.position,
+        pose.orientation,
+        dt,
+        ARCADE_RIG[plane.frame.id],
+        ground,
+      );
     else
       camera = chaseCamera(chase, pose.position, pose.orientation, dt, ground);
 
@@ -768,6 +957,16 @@ export function createAirplaneSim(
     setNearFar(map, height);
 
     const eye = eyeMatrix(angles);
+    marks.show(
+      arcade() && !plane.crashed
+        ? {
+            eye,
+            camera: camera.position,
+            aircraft: pose.position,
+            nose: rotate(pose.orientation, [1, 0, 0]),
+          }
+        : null,
+    );
     const now = performance.now() / 1000;
     // Smoke, camera-relative, newest last within each trail; at most MAX_PUFFS over all trails.
     const puffs = trails.flatMap((t) => t.live(now));
@@ -1089,7 +1288,15 @@ export function createAirplaneSim(
       deps.strike.setStatus(m.status);
     } else if ("airport" in to) {
       const runway = findRunway(runwayLines(), to.airport.center);
-      if (runway) {
+      if (runway && arcade()) {
+        // Arcade flies from the air: over the runway, along it, already at speed.
+        const start = lineUp(
+          runway,
+          settings.windFrom,
+          settings.windKnots * KNOT,
+        );
+        startAirborne(start.position, 450, start.heading);
+      } else if (runway) {
         const start = lineUp(
           runway,
           settings.windFrom,
@@ -1128,6 +1335,11 @@ export function createAirplaneSim(
       deps.strike.setStatus(null);
       strikeLayer.show(null);
     }
+    if (plane && arcade()) {
+      toArcade(plane);
+      arcadeCam.orientation = null;
+      aim = rotate(plane.body.orientation, [1, 0, 0]);
+    }
     previous = plane ? cloneBody(plane.body) : null;
     chase = { position: [0, 0, 0], ready: false };
     fixed.reset();
@@ -1142,6 +1354,7 @@ export function createAirplaneSim(
     host.setTravelling(to);
     deps.audio.silence();
     aircraft.show(null);
+    marks.show(null);
     strikeLayer.show(null);
     plane = null;
     active = null;
@@ -1224,9 +1437,13 @@ export function createAirplaneSim(
   travel(spawn);
 
   return {
-    frame(_now, dt) {
+    frame(_now, frameDt) {
       if (!plane || !previous || journeys.active) return false;
       const flying = host.isFlying() && !plane.crashed;
+      const arcadeMode = arcade();
+      // Arcade runs the whole game, the strike included, a little faster than real time.
+      // Not online: both sides of a co-op match keep one clock.
+      const dt = arcadeMode && !link ? frameDt * ARCADE_TIME_SCALE : frameDt;
       let alpha = 1;
       if (flying) {
         const settings = deps.settings();
@@ -1253,16 +1470,22 @@ export function createAirplaneSim(
             return;
           }
           updatePilot(pilot, keys, h, settings.selfCentring);
-          const controls = controlsFrom(pilot, keys);
           const [east, north, up] = current.body.position;
           const below = ground(east, north);
           env.ground = up - below > CONTACT_HEIGHT ? () => below : ground;
-          stepAirplane(
-            current,
-            settings.assists ? assist(controls, current) : controls,
-            env,
-            h,
-          );
+          if (arcadeMode) {
+            const input = arcadeInput();
+            pilot.throttle = arcadeThrottle(input);
+            stepArcade(current, input, env.ground, h);
+          } else {
+            const controls = controlsFrom(pilot, keys);
+            stepAirplane(
+              current,
+              settings.assists ? assist(controls, current) : controls,
+              env,
+              h,
+            );
+          }
           if (mission && steps && !current.crashed) {
             // Hunters go for the partner's interceptor; without one, for the site.
             mission.partner?.step(h);
@@ -1328,6 +1551,8 @@ export function createAirplaneSim(
           for (const t of trails) t.cut();
         }
         env.ground = ground;
+        // The pointer never falls more than its reach behind (a stall, say, drops the nose away from it).
+        if (arcadeMode) reinAim(rotate(plane.body.orientation, [1, 0, 0]));
         if (plane.crashed) host.setCrash(plane.crashed);
         if (mission) {
           if (!steps) coast(mission.game, dt);
@@ -1380,6 +1605,7 @@ export function createAirplaneSim(
           pilot.parkingBrake = !pilot.parkingBrake;
         else if (
           event.code === "KeyG" &&
+          !arcade() &&
           plane?.frame.retractable &&
           plane.wheelsDown === 0
         ) {
@@ -1387,6 +1613,8 @@ export function createAirplaneSim(
           plane.gearCommand = !plane.gearCommand;
         } else if (event.code === "KeyE") {
           wantFire = true;
+        } else if (event.code === "KeyQ") {
+          wantSwitch = true;
         } else if (event.code === "KeyX") {
           smokeOn = !smokeOn;
           for (const t of trails) t.cut();
@@ -1396,6 +1624,7 @@ export function createAirplaneSim(
               (CAMERA_MODES.indexOf(mode) + 1) % CAMERA_MODES.length
             ];
           chase.ready = false;
+          arcadeCam.orientation = null;
         }
       }
       host.wake();
@@ -1411,11 +1640,17 @@ export function createAirplaneSim(
         wantFire = true;
         host.wake();
       }
+      // The middle button moves the lock to the next target in range.
+      if (button === 1 && mission) {
+        wantSwitch = true;
+        host.wake();
+      }
     },
 
     mouseMove(dx, dy, buttons) {
-      // Right drag orbits in the orbit view; everything else is the yoke.
+      // Right drag orbits in the orbit view; otherwise arcade moves the pointer, realistic the yoke.
       if (mode === "orbit" && buttons & 2) dragOrbit(orbit, dx, dy);
+      else if (arcade()) moveAim(dx, dy);
       else moveStick(pilot, dx, dy);
       host.wake();
     },
@@ -1447,6 +1682,7 @@ export function createAirplaneSim(
       link?.dispose();
       deps.audio.silence();
       aircraft.show(null);
+      marks.remove();
       host.setCrash(null);
       host.setTravelling(null);
       active = null;

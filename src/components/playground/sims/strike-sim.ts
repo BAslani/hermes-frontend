@@ -10,6 +10,7 @@ import {
   look,
   step,
 } from "@/lib/drone-controls";
+import { ARCADE_TIME_SCALE } from "@/lib/flight/arcade";
 import { eyeMatrix } from "@/lib/flight/camera";
 import { type LngLat, toLngLat, toLocal } from "@/lib/flight/frame";
 import { type Partner, standInJet } from "@/lib/flight/partner";
@@ -33,6 +34,7 @@ import {
   stepLock,
   stepStrike,
   strikeMedal,
+  switchLock,
   threatsLeft,
   totalThreats,
 } from "@/lib/flight/strike";
@@ -219,6 +221,8 @@ export function createStrikeSim(
   let siteGround = 0;
   let restoreLook: (() => void) | null = null;
   let wantFire = false;
+  /** A lock switch asked for (T or the middle button), done on the next frame. */
+  let wantSwitch = false;
   let lastHud = 0;
   let lastGround = 0;
   let bannerSeq = 0;
@@ -692,7 +696,12 @@ export function createStrikeSim(
   travel(scenario);
 
   return {
-    frame(now, dt) {
+    frame(now, frameDt) {
+      // Arcade runs the defence a little faster than real time (not online: both sides keep one clock).
+      const dt =
+        deps.settings().gameplay === "arcade" && !deps.coop
+          ? frameDt * ARCADE_TIME_SCALE
+          : frameDt;
       if (!drone || !game || journeys.active) return false;
       const flying = host.isFlying();
       if (!flying) {
@@ -744,6 +753,9 @@ export function createStrikeSim(
       guestGunCooldown = Math.max(0, guestGunCooldown - dt);
       fx.step(dt, game.time, ground);
       const wasLocked = lock.locked;
+      if (wantSwitch && switchLock(lock, camera, forward, game.threats, ground))
+        cue("count", 0.5);
+      wantSwitch = false;
       stepLock(lock, camera, forward, game.threats, dt, ground);
       if (lock.locked && !wasLocked) cue("lock");
       if (triggerHeld || host.keys.has("KeyG")) {
@@ -821,6 +833,10 @@ export function createStrikeSim(
         event.preventDefault();
       if (!event.repeat && event.code === "KeyR") this.reset();
       if (event.code === "KeyF") wantFire = true;
+      if (event.code === "KeyT") {
+        event.preventDefault();
+        if (!event.repeat) wantSwitch = true;
+      }
       host.wake();
     },
 
@@ -843,6 +859,7 @@ export function createStrikeSim(
     mouseDown(button) {
       if (button === 0) wantFire = true;
       if (button === 2) triggerHeld = true;
+      if (button === 1) wantSwitch = true;
       host.wake();
     },
 

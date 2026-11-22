@@ -6,9 +6,19 @@ import {
   type ServerMessage,
 } from "./protocol";
 
-/** The co-op relay; NEXT_PUBLIC_* values are inlined at build time. */
-export const COOP_SERVER_URL =
-  process.env.NEXT_PUBLIC_COOP_SERVER_URL?.trim() || "ws://localhost:4000/ws";
+/**
+ * The co-op relay. NEXT_PUBLIC_COOP_SERVER_URL wins when set (inlined at
+ * build time); otherwise the relay on port 4000 of whatever host served this
+ * page, so localhost and a LAN address both work without a rebuild.
+ */
+export function coopServerUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_COOP_SERVER_URL?.trim();
+  if (configured) return configured;
+  if (typeof window === "undefined") return "ws://localhost:4000/ws";
+  const { protocol, hostname } = window.location;
+  const host = hostname.includes(":") ? `[${hostname}]` : hostname;
+  return `${protocol === "https:" ? "wss" : "ws"}://${host}:4000/ws`;
+}
 
 export interface CoopClient {
   send(message: ClientMessage): void;
@@ -34,7 +44,7 @@ export interface CoopSession {
  * Open the relay socket. No automatic reconnect: a dropped host closes the
  * room anyway, so the lobby starts again instead.
  */
-export function connectCoop(url = COOP_SERVER_URL): Promise<CoopClient> {
+export function connectCoop(url = coopServerUrl()): Promise<CoopClient> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const listeners = new Set<(message: ServerMessage) => void>();

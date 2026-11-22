@@ -17,6 +17,7 @@ import {
   cross,
   DEG,
   dot,
+  nlerp,
   normalize,
   type Quat,
   RAD,
@@ -174,6 +175,58 @@ export function chaseCamera(
     position: state.position,
     forward: normalize(sub(lookAt, state.position)),
     up: [0, 0, 1],
+  };
+}
+
+/** The arcade camera's own attitude, trailing the aircraft's. */
+export interface ArcadeCameraState {
+  orientation: Quat | null;
+}
+
+/** Where the arcade camera sits, body frame of its trailing attitude, metres. */
+export interface ArcadeCameraRig {
+  back: number;
+  up: number;
+  /** Looks at a point this far ahead of the aircraft. */
+  lead: number;
+}
+
+/** How quickly the arcade camera catches up with the aircraft's attitude (1/s). */
+export const ARCADE_CAMERA_FOLLOW = 5;
+
+/**
+ * Arcade chase camera, as in action flight games: behind the tail and a
+ * little above, turning with the aircraft (roll and pitch included, so the
+ * horizon tilts in a bank) but a moment behind it, so a hard pull or roll
+ * swings the aircraft off centre before the view catches up. The camera's
+ * position hangs off the aircraft through that trailing attitude, so at any
+ * speed it stays the same distance behind.
+ */
+export function arcadeCamera(
+  state: ArcadeCameraState,
+  aircraft: Vec3,
+  orientation: Quat,
+  dt: number,
+  rig: ArcadeCameraRig,
+  groundAt: (east: number, north: number) => number,
+): CameraPose {
+  const q =
+    state.orientation === null
+      ? orientation
+      : nlerp(
+          state.orientation,
+          orientation,
+          1 - Math.exp(-ARCADE_CAMERA_FOLLOW * dt),
+        );
+  state.orientation = q;
+  let position = add(aircraft, rotate(q, [-rig.back, 0, rig.up]));
+  const floor = groundAt(position[0], position[1]) + CHASE.clearance;
+  if (position[2] < floor) position = [position[0], position[1], floor];
+  const lookAt = add(aircraft, rotate(q, [rig.lead, 0, 0]));
+  return {
+    position,
+    forward: normalize(sub(lookAt, position)),
+    up: rotate(q, [0, 0, 1]),
   };
 }
 

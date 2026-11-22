@@ -1107,41 +1107,102 @@ const angleTo = (eye: Vec3, forward: Vec3, p: Vec3) => {
   };
 };
 
+/** How a seeker locks: the cones (radians), the time to lock (s) and the reach (m). */
+export interface LockRules {
+  /** A target this close to the crosshair starts a lock... */
+  cone: number;
+  /** ...which holds, and can be switched to, while it stays within this. */
+  keep: number;
+  time: number;
+  range: number;
+}
+
+export const LOCK_RULES: LockRules = { ...LOCK };
+
+type LockTarget = { id: number; position: Vec3; alive: boolean };
+
+/** A bare number is a range, with the other rules from LOCK. */
+const rulesOf = (rules: LockRules | number): LockRules =>
+  typeof rules === "number" ? { ...LOCK_RULES, range: rules } : rules;
+
+/** A target's angle off the crosshair if it is alive, within `cone`, in range and in sight; else null. */
+function usableAngle(
+  t: LockTarget,
+  eye: Vec3,
+  forward: Vec3,
+  cone: number,
+  range: number,
+  ground: GroundFn,
+) {
+  if (!t.alive) return null;
+  const { angle, distance } = angleTo(eye, forward, t.position);
+  if (angle > cone || distance > range) return null;
+  return lineOfSight(eye, t.position, ground) ? angle : null;
+}
+
 /**
  * Keep or build a lock on the drone nearest the crosshair: a drone within
- * the cone, in range and in sight starts it, it builds over LOCK.time while
- * the drone stays within the wider keep cone, and it is lost or moves to
- * another drone otherwise. `forward` is a unit vector.
+ * the cone, in range and in sight starts it, it builds over `rules.time`
+ * while the drone stays within the wider keep cone, and it is lost or moves
+ * to another drone otherwise. `forward` is a unit vector.
  */
 export function stepLock(
   lock: Lock,
   eye: Vec3,
   forward: Vec3,
-  threats: { id: number; position: Vec3; alive: boolean }[],
+  threats: LockTarget[],
   dt: number,
   ground: GroundFn,
-  range: number = LOCK.range,
+  rules: LockRules | number = LOCK_RULES,
 ) {
-  const usable = (t: (typeof threats)[number], cone: number) => {
-    if (!t.alive) return null;
-    const { angle, distance } = angleTo(eye, forward, t.position);
-    if (angle > cone || distance > range) return null;
-    return lineOfSight(eye, t.position, ground) ? angle : null;
-  };
+  const r = rulesOf(rules);
+  const usable = (t: LockTarget, cone: number) =>
+    usableAngle(t, eye, forward, cone, r.range, ground);
   const current = threats.find((t) => t.id === lock.target);
-  if (current && usable(current, LOCK.keep) !== null) {
-    lock.progress = Math.min(1, lock.progress + dt / LOCK.time);
+  if (current && usable(current, r.keep) !== null) {
+    lock.progress = Math.min(1, lock.progress + dt / r.time);
   } else {
     let best: { id: number; angle: number } | null = null;
     for (const t of threats) {
-      const angle = usable(t, LOCK.cone);
+      const angle = usable(t, r.cone);
       if (angle !== null && (!best || angle < best.angle))
         best = { id: t.id, angle };
     }
     lock.target = best?.id ?? null;
-    lock.progress = best ? Math.min(1, dt / LOCK.time) : 0;
+    lock.progress = best ? Math.min(1, dt / r.time) : 0;
   }
   lock.locked = lock.target !== null && lock.progress >= 1;
+}
+
+/**
+ * Move the lock to the next target in lock range (within the keep cone, in
+ * range and in sight), stepping outwards from the crosshair and wrapping
+ * round to the nearest. The new target locks from scratch. Returns whether
+ * the lock moved.
+ */
+export function switchLock(
+  lock: Lock,
+  eye: Vec3,
+  forward: Vec3,
+  threats: LockTarget[],
+  ground: GroundFn,
+  rules: LockRules | number = LOCK_RULES,
+): boolean {
+  const r = rulesOf(rules);
+  const candidates: { id: number; angle: number }[] = [];
+  for (const t of threats) {
+    const angle = usableAngle(t, eye, forward, r.keep, r.range, ground);
+    if (angle !== null) candidates.push({ id: t.id, angle });
+  }
+  if (!candidates.some((c) => c.id !== lock.target)) return false;
+  candidates.sort((a, b) => a.angle - b.angle || a.id - b.id);
+  const at = candidates.findIndex((c) => c.id === lock.target);
+  const next =
+    at < 0 ? candidates[0] : candidates[(at + 1) % candidates.length];
+  lock.target = next.id;
+  lock.progress = 0;
+  lock.locked = false;
+  return true;
 }
 
 /* Score ------------------------------------------------------------------- */

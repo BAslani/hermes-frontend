@@ -162,13 +162,15 @@ export function PlaygroundPage({
 
   const changeSettings = useCallback(
     (next: FlightSettings) => {
-      const swapped = next.aircraft !== getSettings().aircraft;
+      const swapped =
+        next.aircraft !== getSettings().aircraft ||
+        (vehicle === "airplane" && next.gameplay !== getSettings().gameplay);
       setSettings(next);
       if (!next.sound) audio.silence();
-      // A different aircraft: start again where this flight started, in it.
+      // A different aircraft, or airplane gameplay: start again where this flight started, in it.
       if (swapped) simRef.current?.reset();
     },
-    [audio],
+    [audio, vehicle],
   );
 
   // The map.

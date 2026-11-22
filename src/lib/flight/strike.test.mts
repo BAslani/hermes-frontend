@@ -27,6 +27,7 @@ import {
   stepStrike,
   stepThreat,
   strikeMedal,
+  switchLock,
   type Threat,
   threatsLeft,
   totalThreats,
@@ -163,6 +164,50 @@ test("lock: builds over LOCK.time on a drone near the crosshair, not off it or b
   stepLock(blocked, eye, [0, 1, 0], [t], 0.1, hill);
   assert.equal(blocked.target, null);
   assert.equal(lineOfSight(eye, t.position, hill), false);
+});
+
+test("lock: switches between targets in lock range, outwards from the crosshair, and keeps the pick", () => {
+  const eye: Vec3 = [0, 0, 100];
+  const at = (id: number, deg: number, distance = 2000): Threat => ({
+    ...threat(
+      [
+        Math.sin((deg * Math.PI) / 180) * distance,
+        Math.cos((deg * Math.PI) / 180) * distance,
+        100,
+      ],
+      [0, 0, 0],
+    ),
+    id,
+  });
+  // 1 on the crosshair, 2 at 5°, 3 at 9° (inside the keep cone), 4 out of range, 5 far off to the side.
+  const threats = [at(1, 0), at(2, 5), at(3, 9), at(4, 2, 9000), at(5, 40)];
+  const lock = newLock();
+  for (let i = 0; i < 20; i++)
+    stepLock(lock, eye, [0, 1, 0], threats, 0.1, flat);
+  assert.equal(lock.target, 1);
+  assert.equal(lock.locked, true);
+
+  const order: (number | null)[] = [];
+  for (let i = 0; i < 3; i++) {
+    assert.equal(switchLock(lock, eye, [0, 1, 0], threats, flat), true);
+    order.push(lock.target);
+  }
+  assert.deepEqual(order, [2, 3, 1]);
+
+  // The new pick starts locking again, and the seeker stays on it though 1 is nearer the crosshair.
+  switchLock(lock, eye, [0, 1, 0], threats, flat);
+  assert.equal(lock.target, 2);
+  assert.equal(lock.locked, false);
+  for (let i = 0; i < 20; i++)
+    stepLock(lock, eye, [0, 1, 0], threats, 0.1, flat);
+  assert.equal(lock.target, 2);
+  assert.equal(lock.locked, true);
+
+  // Only one target in range: nothing to switch to.
+  const alone = newLock();
+  stepLock(alone, eye, [0, 1, 0], [threats[0]], 0.1, flat);
+  assert.equal(switchLock(alone, eye, [0, 1, 0], [threats[0]], flat), false);
+  assert.equal(alone.target, 1);
 });
 
 const spec: StrikeSpec = {

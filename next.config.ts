@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Development only: open the dev server from another device on the local
+  // network, whatever address this machine has there (localhost is always allowed).
+  allowedDevOrigins: ["10.*.*.*", "172.*.*.*", "192.168.*.*"],
   cacheComponents: true,
   partialPrefetching: true,
   // Self-contained server bundle, as map-witel deploys it.

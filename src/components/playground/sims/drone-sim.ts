@@ -25,9 +25,11 @@ import {
   parseViewerHash,
   type ViewerView,
 } from "@/lib/drone-flight";
+import { ARCADE_TIME_SCALE } from "@/lib/flight/arcade";
 import { edgeState, type FlightLimit, flightLimit } from "@/lib/geo-boundary";
 import type { OpticsBridge } from "../DroneOptics";
 import type { HudStore } from "../hud-store";
+import { getSettings } from "../settings";
 import { droneOptics } from "./optics";
 import { Journeys, type Sim, type SimHost } from "./types";
 
@@ -249,7 +251,12 @@ export function createDroneSim(
   });
 
   return {
-    frame(now, dt) {
+    frame(now, frameDt) {
+      // Arcade flies the drone a little faster than real time.
+      const dt =
+        getSettings().gameplay === "arcade"
+          ? frameDt * ARCADE_TIME_SCALE
+          : frameDt;
       // A jump in progress owns the camera; it wakes the loop when it lands.
       if (!drone || journeys.active) return false;
       const current = drone;

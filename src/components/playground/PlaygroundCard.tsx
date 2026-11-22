@@ -74,6 +74,7 @@ export function PlaygroundCard({
   const a = t.airplane.controls;
   const h = t.helicopter.controls;
   const s = t.strike.controls;
+  const g = t.gameplay;
   const controls: { keys: string[]; action: string }[] =
     vehicle === "strike"
       ? [
@@ -81,6 +82,7 @@ export function PlaygroundCard({
           { keys: ["Space", "C"], action: t.controls.lift },
           { keys: [t.mouse], action: t.controls.look },
           { keys: ["◎"], action: s.lock },
+          { keys: [t.strike.middleButton, "T"], action: s.switchLock },
           { keys: [t.strike.click, "F"], action: s.fire },
           { keys: [t.strike.rightButton, "G"], action: s.gun },
           { keys: ["Shift"], action: t.controls.boost },
@@ -116,20 +118,37 @@ export function PlaygroundCard({
               { keys: ["Esc"], action: t.controls.pause },
             ]
           : [
-              { keys: [t.mouse], action: a.yoke },
-              { keys: ["W", "S"], action: a.throttle },
-              { keys: ["A", "D"], action: a.rudder },
-              { keys: ["F", "V"], action: a.flaps },
-              { keys: ["B"], action: a.brake },
-              { keys: ["Shift", "B"], action: a.parkingBrake },
-              { keys: ["[", "]"], action: a.trim },
-              ...(settings.aircraft === "jet"
-                ? [{ keys: ["G"], action: t.aircraft.gear }]
-                : []),
+              ...(settings.gameplay === "arcade"
+                ? [
+                    {
+                      keys: [t.mouse],
+                      action: g.controls.stick,
+                    },
+                    { keys: ["W"], action: g.controls.boost },
+                    { keys: ["S"], action: g.controls.brake },
+                    { keys: ["W", "+", "S"], action: g.controls.highG },
+                    { keys: ["A", "D"], action: g.controls.yaw },
+                  ]
+                : [
+                    { keys: [t.mouse], action: a.yoke },
+                    { keys: ["W", "S"], action: a.throttle },
+                    { keys: ["A", "D"], action: a.rudder },
+                    { keys: ["F", "V"], action: a.flaps },
+                    { keys: ["B"], action: a.brake },
+                    { keys: ["Shift", "B"], action: a.parkingBrake },
+                    { keys: ["[", "]"], action: a.trim },
+                    ...(settings.aircraft === "jet"
+                      ? [{ keys: ["G"], action: t.aircraft.gear }]
+                      : []),
+                  ]),
               // Strike missions only (always flown in the F-14).
               {
                 keys: [t.strike.click, "E"],
                 action: t.jetStrike.controls.fire,
+              },
+              {
+                keys: [t.strike.middleButton, "Q"],
+                action: t.jetStrike.controls.switchLock,
               },
               { keys: ["Space"], action: t.jetStrike.controls.gun },
               { keys: ["X"], action: t.race.controls.smoke },
@@ -172,35 +191,69 @@ export function PlaygroundCard({
                 : t.airplane.intro}
         </p>
 
-        {vehicle === "airplane" && (
+        {vehicle !== "helicopter" && (
           <div className="mb-6">
-            <div
-              role="radiogroup"
-              aria-label={t.aircraft.title}
-              className="inline-flex rounded-full border border-night-line bg-night-3 p-1"
-            >
-              {(["trainer", "jet"] as const).map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  role="radio"
-                  aria-checked={settings.aircraft === a}
-                  onClick={() => onSettings({ ...settings, aircraft: a })}
-                  className={`rounded-full px-3.5 py-1 text-xs font-semibold ${
-                    settings.aircraft === a
-                      ? "bg-white text-night"
-                      : "text-night-body hover:text-white"
-                  }`}
+            <div className="flex flex-wrap gap-2">
+              <div
+                role="radiogroup"
+                aria-label={t.gameplay.title}
+                className="inline-flex rounded-full border border-night-line bg-night-3 p-1"
+              >
+                {(["realistic", "arcade"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={settings.gameplay === mode}
+                    onClick={() => onSettings({ ...settings, gameplay: mode })}
+                    className={`rounded-full px-3.5 py-1 text-xs font-semibold ${
+                      settings.gameplay === mode
+                        ? "bg-accent-bright text-night"
+                        : "text-night-body hover:text-white"
+                    }`}
+                  >
+                    {t.gameplay[mode]}
+                  </button>
+                ))}
+              </div>
+              {vehicle === "airplane" && (
+                <div
+                  role="radiogroup"
+                  aria-label={t.aircraft.title}
+                  className="inline-flex rounded-full border border-night-line bg-night-3 p-1"
                 >
-                  {t.aircraft[a]}
-                </button>
-              ))}
+                  {(["trainer", "jet"] as const).map((a) => (
+                    <button
+                      key={a}
+                      type="button"
+                      role="radio"
+                      aria-checked={settings.aircraft === a}
+                      onClick={() => onSettings({ ...settings, aircraft: a })}
+                      className={`rounded-full px-3.5 py-1 text-xs font-semibold ${
+                        settings.aircraft === a
+                          ? "bg-white text-night"
+                          : "text-night-body hover:text-white"
+                      }`}
+                    >
+                      {t.aircraft[a]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            {settings.aircraft === "jet" && (
-              <p className="mt-2 text-xs text-night-muted">
-                {t.aircraft.jetNote}
-              </p>
-            )}
+            <p className="mt-2 text-xs text-night-muted">
+              {vehicle !== "airplane"
+                ? settings.gameplay === "arcade"
+                  ? t.gameplay.droneArcadeNote
+                  : t.gameplay.droneRealisticNote
+                : settings.gameplay === "arcade"
+                  ? t.gameplay.arcadeNote
+                  : t.gameplay.realisticNote}
+              {vehicle === "airplane" &&
+                settings.gameplay === "realistic" &&
+                settings.aircraft === "jet" &&
+                ` ${t.aircraft.jetNote}`}
+            </p>
           </div>
         )}
 

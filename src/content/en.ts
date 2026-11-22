@@ -145,6 +145,24 @@ export const en = {
         pause: "Pause",
       },
     },
+    gameplay: {
+      title: "Gameplay",
+      realistic: "Realistic",
+      arcade: "Arcade",
+      realisticNote:
+        "Real flight physics: manage speed, angle of attack and the landing.",
+      droneRealisticNote: "The game at real speed.",
+      droneArcadeNote: "The same game, a little faster.",
+      arcadeNote:
+        "Action-game flying: the aircraft follows the pointer you move with the mouse, a chase camera turns with it, the game runs faster, and every flight starts in the air.",
+      controls: {
+        stick: "Move the pointer: the aircraft eases round to follow it",
+        boost: "Boost (hold)",
+        brake: "Air brake (hold)",
+        highG: "High-G turn (hold both): turns tighter, bleeds speed",
+        yaw: "Yaw",
+      },
+    },
     coop: {
       title: "Online co-op",
       mission: "Mission",
@@ -164,6 +182,7 @@ export const en = {
       gettingReady: "Getting {mission} ready",
       controls: {
         fire: "Fire a missile at the locked launcher or drone",
+        switchLock: "Switch the lock to the next target in range",
         gun: "Gun (hold)",
       },
     },
@@ -255,11 +274,13 @@ export const en = {
       gettingReady: "Getting {mission} ready",
       hint: "Click/F missile · right-hold/G gun · V camera · Esc pause",
       click: "Click",
+      middleButton: "Middle button",
       rightButton: "Right button",
       controls: {
         fire: "Fire a missile",
         gun: "Gun (hold): aim at the yellow pipper",
         lock: "Lock on: hold a drone in the circle",
+        switchLock: "Switch the lock to the next drone in range",
         restart: "Restart the defence",
       },
       gun: "Gun",
