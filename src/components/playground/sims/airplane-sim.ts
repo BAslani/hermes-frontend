@@ -250,11 +250,11 @@ const JET_GUN: Vec3 = [7.5, 0.7, 0];
  * Arcade pointer: radians it moves per pixel of mouse movement, and how far
  * ahead of the nose it may run (the aircraft is always catching up to it).
  */
-const AIM_SENSITIVITY = 0.0012;
+const AIM_SENSITIVITY = 0.001;
 const AIM_REACH = 35 * (Math.PI / 180);
 /** Where the arcade camera sits behind each aircraft, metres. */
 const ARCADE_RIG: Record<Airframe["id"], ArcadeCameraRig> = {
-  jet: { back: 30, up: 6.5, lead: 45 },
+  jet: { back: 35, up: 6.5, lead: 45 },
   racer: { back: 15, up: 3.5, lead: 25 },
   trainer: { back: 17, up: 4, lead: 25 },
 };

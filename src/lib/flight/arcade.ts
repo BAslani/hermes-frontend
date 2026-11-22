@@ -178,7 +178,7 @@ export function followAim(
  * Seconds for the turn rates to follow the controls: long enough that
  * every turn and roll eases in and out.
  */
-const RATE_LAG = 0.3;
+const RATE_LAG = 0.4;
 /** Share of gravity along the flight path that changes the speed. */
 const ENERGY = 1;
 /** Nose drop in a stall, rad/s at the stall speed's full shortfall. */
