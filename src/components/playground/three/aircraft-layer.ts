@@ -14,6 +14,7 @@ import {
   createSmokeCloud,
   disposeSmoke,
   drawSmoke,
+  type PuffData,
   place,
 } from "./eye-space";
 import { createHeliModel, type HeliModel } from "./heli-model";
@@ -59,6 +60,8 @@ export interface AircraftView {
   pixelsPerMeter: number;
   /** Which airframe to draw. */
   model: "trainer" | "racer" | "jet" | "heli";
+  /** Swing wings (the jet): 0 spread, 1 fully swept. */
+  wingSweep?: number;
   /** Retractable gear position, 1 down, 0 up. */
   gearDown: number;
   /** Sun and sky; daylight when absent. */
@@ -83,6 +86,9 @@ export interface WorldView {
   }[];
   /** Smoke puffs: camera-relative positions (xyz per puff) and ages 0 → 1. */
   smoke: { offsets: Float32Array; ages: Float32Array; count: number } | null;
+  /** The jet at full throttle: thick exhaust smoke, and afterburner flame at the nozzles. */
+  boostSmoke?: PuffData | null;
+  afterburner?: PuffData | null;
   /** Missions: landing zones on the ground (centre offset, radius), the current one highlighted. */
   pads?: { offset: Vec3; radius: number; active: boolean }[];
   /** Missions: a light beam rising from the current target, on the ground. */
@@ -149,6 +155,9 @@ interface GateMeshes {
 
 /** Most smoke puffs drawn at once. */
 export const MAX_PUFFS = 640;
+/** Most full-throttle smoke puffs, and afterburner flame puffs, drawn at once. */
+export const MAX_BOOST_PUFFS = 600;
+export const MAX_FLAME_PUFFS = 120;
 /** Bursts drawn at once. */
 const MAX_BURSTS = 3;
 
@@ -270,6 +279,14 @@ export function createAircraftLayer(id: string): AircraftLayer {
   const trailSmoke = smokeCloud(MAX_PUFFS, 0xf4f1ea);
   const markerSmoke = smokeCloud(MAX_MARKER_PUFFS, 0xff7a2a);
   const avalancheCloud = smokeCloud(MAX_AVALANCHE_PUFFS, 0xf2f5f8, 3.2);
+  const boostCloud = smokeCloud(MAX_BOOST_PUFFS, 0xe4e1da, 2.1);
+  const flameCloud = createSmokeCloud(
+    worldScene,
+    MAX_FLAME_PUFFS,
+    0xff8a2a,
+    0.55,
+    true,
+  );
 
   // Snow: fixed random spots in a box, carried by the wind and wrapped round the camera.
   const flakeSeeds = new Float32Array(SNOWFLAKES * 3);
@@ -447,6 +464,8 @@ export function createAircraftLayer(id: string): AircraftLayer {
     drawSmoke(trailSmoke, world.smoke, eye, pixelScale);
     drawSmoke(markerSmoke, world.markerSmoke, eye, pixelScale);
     drawSmoke(avalancheCloud, world.avalanche, eye, pixelScale);
+    drawSmoke(boostCloud, world.boostSmoke, eye, pixelScale);
+    drawSmoke(flameCloud, world.afterburner, eye, pixelScale);
 
     snow.visible = Boolean(world.snow && world.snow.intensity > 0.02);
     if (world.snow && snow.visible) {
@@ -610,7 +629,13 @@ export function createAircraftLayer(id: string): AircraftLayer {
       for (const b of bursts) (b.material as THREE.Material).dispose();
       snowGeometry.dispose();
       snowMaterial.dispose();
-      for (const cloud of [trailSmoke, markerSmoke, avalancheCloud])
+      for (const cloud of [
+        trailSmoke,
+        markerSmoke,
+        avalancheCloud,
+        boostCloud,
+        flameCloud,
+      ])
         disposeSmoke(cloud);
       padGeometry.dispose();
       padMaterials.active.dispose();
@@ -705,6 +730,7 @@ export function createAircraftLayer(id: string): AircraftLayer {
         rpm: current.rpm,
         dt: current.dt,
         gearDown: current.gearDown,
+        wingSweep: current.wingSweep,
       });
       current.dt = 0; // a repaint without a new view must not advance the propeller again
       aimLights(eye, aircraftLights, current.light ?? DAY_LIGHT);

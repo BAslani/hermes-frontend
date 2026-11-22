@@ -52,8 +52,8 @@ export interface StrikeView {
   fire: PuffData | null;
   /** The defended site: a ring at the height the drones aim for, coloured by what is left of it. */
   site: { offset: Vec3; radius: number; health: number } | null;
-  /** Drone launchers on the ground, camera-relative, each facing the way its drones leave. */
-  launchers: { offset: Vec3; forward: Vec3 }[];
+  /** Drone launchers on the ground, camera-relative, each facing the way its drones leave; `inSight` when the camera sees it (its beam shows only then). */
+  launchers: { offset: Vec3; forward: Vec3; inSight: boolean }[];
   /** The co-op partner's interceptor drone, seen from the F-14. */
   partner?: { offset: Vec3; forward: Vec3 } | null;
 }
@@ -675,7 +675,8 @@ export function createStrikeLayer(id: string): StrikeLayer {
         placeAlong(ally, eye, current.partner.forward, current.partner.offset);
       launcherPool.forEach(({ truck, beam }, i) => {
         const l = current.launchers[i];
-        truck.visible = beam.visible = Boolean(l);
+        truck.visible = Boolean(l);
+        beam.visible = Boolean(l?.inSight);
         if (!l) return;
         placeAlong(truck, eye, l.forward, l.offset);
         // Wider with distance, so it stays a few pixels across (2 m up close, 15 m at 7 km).

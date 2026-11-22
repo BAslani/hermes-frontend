@@ -2,12 +2,13 @@ import type { GroundFn } from "@/lib/flight/contact";
 import {
   LAUNCHER,
   launcherPosition,
+  lineOfSight,
   MISSILE,
   type StrikeEvent,
   type StrikeGame,
 } from "@/lib/flight/strike";
 import { Trail } from "@/lib/flight/trail";
-import { normalize, scale, sub, type Vec3 } from "@/lib/flight/vec";
+import { length, normalize, scale, sub, type Vec3 } from "@/lib/flight/vec";
 import { PuffBuffer } from "../three/eye-space";
 import {
   MAX_DEBRIS,
@@ -26,6 +27,8 @@ const PIECES = 9;
 const SMOKING_PIECES = 3;
 /** Each tracer is drawn as the stretch it flew in the last this long, s (never back past the muzzle). */
 const TRACER_LENGTH = 0.03;
+/** The line of sight goes to this far above a launcher's aim point, metres: the top of the truck, clear of the ground it stands on. */
+const SIGHT_ABOVE = 3;
 
 /** A falling piece of a downed drone. */
 interface Piece {
@@ -88,6 +91,20 @@ export function createStrikeEffects() {
   const firePuffs = new PuffBuffer(MAX_FIRE_PUFFS);
   const debrisOffsets = new Float32Array(MAX_DEBRIS * 3);
   const tracerOffsets = new Float32Array(MAX_TRACERS * 6);
+
+  /**
+   * Whether the camera sees a launcher, its top a few metres above its aim
+   * point: the ground sampled along the line at most ~80 times, however far.
+   */
+  const inSight = (camera: Vec3, at: Vec3, ground: GroundFn) => {
+    const top: Vec3 = [at[0], at[1], at[2] + SIGHT_ABOVE];
+    return lineOfSight(
+      camera,
+      top,
+      ground,
+      Math.max(60, length(sub(top, camera)) / 80),
+    );
+  };
 
   /** A column of smoke rising from the ground at `at`. */
   const column = (at: Vec3, ground: GroundFn) =>
@@ -318,6 +335,8 @@ export function createStrikeEffects() {
             {
               offset: rel([at[0], at[1], at[2] - LAUNCHER.height]),
               forward: [site[0] - at[0], site[1] - at[1], 0] as Vec3,
+              // Its beam shows only when nothing stands between it and the camera.
+              inSight: inSight(camera, at, ground),
             },
           ];
         }),

@@ -31,6 +31,8 @@ export interface AirplaneModel {
     dt: number;
     /** Retractable gear: 1 down, 0 up. Ignored by fixed gear. */
     gearDown?: number;
+    /** Swing wings: 0 spread, 1 fully swept back. Ignored by fixed wings. */
+    wingSweep?: number;
   }): void;
   /** From the pilot's seat the cabin shell is hidden, so only the nose, wing and struts frame the view. */
   setCockpit(inside: boolean): void;

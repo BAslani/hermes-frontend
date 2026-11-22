@@ -1065,6 +1065,67 @@ function step(
   }
 }
 
+/* Arcade ------------------------------------------------------------------ */
+
+/**
+ * How much harder a launcher strike is in arcade mode, where the aircraft
+ * turns and locks on far more easily: more drones, faster and closer
+ * together, shorter breaks, a target that takes fewer hits, and hunters off
+ * every launcher that go for the aircraft.
+ */
+export const ARCADE_STRIKE = {
+  drones: 1.5,
+  speed: 1.2,
+  interval: 0.7,
+  breaks: 0.6,
+  siteHits: 0.5,
+  /** Hunters each wave from a launcher: this many, plus one per wave before it. */
+  hunters: 2,
+  hunterSpeed: 90,
+  hunterCruise: 140,
+  /** Hits the aircraft takes from hunters before it is lost. */
+  playerHits: 3,
+} as const;
+
+/** A launcher strike made harder for arcade mode (see ARCADE_STRIKE). Leaves `spec` as it is. */
+export function arcadeStrike(spec: StrikeSpec): StrikeSpec {
+  const a = ARCADE_STRIKE;
+  const launchers = spec.launchers?.length ?? 0;
+  return {
+    ...spec,
+    hitsAllowed: Math.max(1, Math.ceil(spec.hitsAllowed * a.siteHits)),
+    firstBreak: spec.firstBreak * a.breaks,
+    breakTime: spec.breakTime * a.breaks,
+    playerHits: a.playerHits,
+    waves: spec.waves.map((wave, w) => {
+      const groups: WaveGroup[] = wave.groups.map((g) => ({
+        ...g,
+        count: Math.ceil(g.count * a.drones),
+        interval: g.interval * a.interval,
+        speed: g.speed * a.speed,
+      }));
+      if (launchers > 0) {
+        // Hunters take off from the launcher the wave's first group uses, or the next in turn.
+        const from = wave.groups.find((g) => g.launcher !== undefined);
+        const launcher = from?.launcher ?? w % launchers;
+        groups.push({
+          launcher,
+          from: from?.from ?? 0,
+          spread: 0,
+          count: a.hunters + w,
+          interval: 4,
+          delay: 3,
+          speed: a.hunterSpeed,
+          cruise: a.hunterCruise,
+          weave: 0,
+          kind: "hunter",
+        });
+      }
+      return { groups };
+    }),
+  };
+}
+
 /* Lock-on ----------------------------------------------------------------- */
 
 export interface Lock {

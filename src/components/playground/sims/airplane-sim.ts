@@ -89,6 +89,7 @@ import { findRunway, lineUp, type RunwayLine } from "@/lib/flight/runway";
 import {
   addMissile,
   addRound,
+  arcadeStrike,
   DECOY_REVEAL,
   FIRE_INTERVAL,
   GUN,
@@ -101,6 +102,7 @@ import {
   newStrike,
   type StrikeEvent,
   type StrikeGame,
+  type StrikeSpec,
   scoreStrike,
   stepLock,
   stepStrike,
@@ -135,9 +137,12 @@ import type { FlightSettings } from "../settings";
 import {
   createAircraftLayer,
   type GateLook,
+  MAX_BOOST_PUFFS,
+  MAX_FLAME_PUFFS,
   MAX_PUFFS,
   type WorldView,
 } from "../three/aircraft-layer";
+import { PuffBuffer } from "../three/eye-space";
 import { JET_EYE } from "../three/jet-model";
 import { RACER_EYE } from "../three/racer-model";
 import { createStrikeLayer } from "../three/strike-layer";
@@ -177,7 +182,11 @@ interface JetStrike {
   lock: Lock;
   /** The interceptor drone in co-op (a stand-in for now). */
   partner: Partner | null;
+  /** Arcade, flown alone: the harder rules (arcadeStrike), hunters after the F-14 itself. */
+  hard: boolean;
   missiles: number;
+  /** Missiles it started with. */
+  magazine: number;
   rounds: number;
   cooldown: number;
   gunCooldown: number;
@@ -220,6 +229,10 @@ const USED_KEYS = new Set([
 ]);
 /** Where the race plane's smoke comes out, body frame. */
 const SMOKE_NOZZLE: Vec3 = [-4.85, 0, -0.02];
+/** Throttle from which the jet counts as at full power (in arcade, boost sets it to 1). */
+const FULL_THROTTLE = 0.98;
+/** Seconds for the wings to swing all the way back or forward. */
+const SWEEP_TIME = 1.6;
 /** The jet's two engine nozzles, just aft of the exits (measured off the model), body frame. */
 const JET_NOZZLES: Vec3[] = [
   [-7.6, 1.29, -0.29],
@@ -230,6 +243,8 @@ const BURST_TIME = 0.7;
 const STRIKE_LAYER = "flight-strike";
 /** The F-14 locks on to a launcher or a drone this far away, metres. */
 const JET_LOCK_RANGE = 9000;
+/** Arcade alone: hunters closer than this set off the warning, metres. */
+const JET_HUNTER_WARNING = 2500;
 /** Lock ids for launchers are below zero (−1 for launcher 0), so they never meet a drone's id. */
 const launcherLockId = (index: number) => -1 - index;
 const lockedLauncher = (id: number) => -1 - id;
@@ -237,9 +252,9 @@ const lockedLauncher = (id: number) => -1 - id;
 const JET_LOCK: Record<FlightSettings["gameplay"], LockRules> = {
   realistic: { ...LOCK, range: JET_LOCK_RANGE },
   arcade: {
-    cone: 12 * (Math.PI / 180),
-    keep: 30 * (Math.PI / 180),
-    time: 0.6,
+    cone: 10 * (Math.PI / 180),
+    keep: 22 * (Math.PI / 180),
+    time: 0.8,
     range: JET_LOCK_RANGE,
   },
 };
@@ -345,6 +360,14 @@ export function createAirplaneSim(
   let smokeOn = true;
   /** One trail per nozzle: the race plane uses the first, the jet both. */
   const trails = [new Trail(), new Trail()];
+  /** The jet at full throttle: thick exhaust smoke, and a short afterburner flame, per nozzle. */
+  const boostTrails = [new Trail(4, 0.02, 300), new Trail(4, 0.02, 300)];
+  const flameTrails = [new Trail(0.2, 0.01, 60), new Trail(0.2, 0.01, 60)];
+  const allTrails = () => [...trails, ...boostTrails, ...flameTrails];
+  const boostPuffs = new PuffBuffer(MAX_BOOST_PUFFS);
+  const flamePuffs = new PuffBuffer(MAX_FLAME_PUFFS);
+  /** The jet's wing sweep: 0 spread, 1 fully swept back at full throttle. */
+  let wingSweep = 0;
   const smokeOffsets = new Float32Array(MAX_PUFFS * 3);
   const smokeAges = new Float32Array(MAX_PUFFS);
   /** Gates flashing just now: index, when, missed or passed. */
@@ -460,6 +483,14 @@ export function createAirplaneSim(
           break;
         case "burst":
           cue("boom", volumeAt(e.at) * 0.6);
+          break;
+        case "player-hit":
+          publishStrike({
+            armourLeft: e.hitsLeft,
+            banner: { kind: "damage", n: e.hitsLeft, seq: ++bannerSeq },
+          });
+          cue("boom", 1);
+          cue("alarm");
           break;
         case "site-hit":
           publishStrike({
@@ -648,10 +679,13 @@ export function createAirplaneSim(
         });
     });
     let closest: number | null = null;
+    /** The nearest hunter, for the warning (arcade alone, where they come for the F-14). */
+    let hunterNear = Infinity;
     for (const t of game.threats) {
       const toSite = length(sub(t.position, game.spec.site));
       closest = Math.min(closest ?? Infinity, toSite);
       const p = screenPoint(eye, rel(t.position), fov, aspect);
+      if (t.kind === "hunter") hunterNear = Math.min(hunterNear, p.distance);
       if (p.visible && boxes.length < MAX_BOXES)
         boxes.push({
           x: p.x,
@@ -689,7 +723,7 @@ export function createAirplaneSim(
     const arrow = nearest as ReturnType<typeof screenPoint> | null;
     deps.strike.push({
       magazine: m.missiles,
-      magazineSize: m.jet.missiles,
+      magazineSize: m.magazine,
       threatsLeft: threatsLeft(game),
       breakLeft: game.phase === "break" ? Math.max(0, game.breakLeft) : null,
       lock: {
@@ -706,7 +740,10 @@ export function createAirplaneSim(
           ? { angle: arrow.angle, distance: arrow.distance }
           : null,
       closest: playing ? closest : null,
-      hunter: null,
+      hunter:
+        m.hard && playing && hunterNear < JET_HUNTER_WARNING
+          ? hunterNear
+          : null,
       shake: 0,
       ammo: m.rounds,
       ammoSize: m.jet.rounds,
@@ -981,9 +1018,28 @@ export function createAirplaneSim(
     }
     const smoke =
       count > 0 ? { offsets: smokeOffsets, ages: smokeAges, count } : null;
-    let world: WorldView | undefined = smoke
-      ? { gates: [], ghost: null, time: now, bursts: [], smoke }
-      : undefined;
+    /** The newest puffs of some trails into a buffer, camera-relative. */
+    const pack = (from: Trail[], buffer: PuffBuffer) => {
+      buffer.clear();
+      const live = from.flatMap((t) => t.live(now));
+      for (const p of live.slice(-buffer.max))
+        buffer.put(sub(p.position, camera.position), p.age);
+      return buffer.data();
+    };
+    const boostSmoke = pack(boostTrails, boostPuffs);
+    const afterburner = pack(flameTrails, flamePuffs);
+    let world: WorldView | undefined =
+      smoke || boostSmoke || afterburner
+        ? {
+            gates: [],
+            ghost: null,
+            time: now,
+            bursts: [],
+            smoke,
+            boostSmoke,
+            afterburner,
+          }
+        : undefined;
     if (active) {
       const { race } = active;
       const finished = race.phase === "finished";
@@ -1060,6 +1116,7 @@ export function createAirplaneSim(
       pixelsPerMeter: scale,
       model: plane.frame.id,
       gearDown: plane.gearDown,
+      wingSweep,
       light: active
         ? LOOKS[active.course.look].light
         : mission
@@ -1158,7 +1215,8 @@ export function createAirplaneSim(
     active = null;
     mission = null;
     endLook();
-    for (const t of trails) t.clear();
+    for (const t of allTrails()) t.clear();
+    wingSweep = 0;
     bursts = [];
     lastBeep = 0;
     if ("course" in to) {
@@ -1219,21 +1277,30 @@ export function createAirplaneSim(
       // Online, both players play one game under drone-defence rules (the
       // drone defends the site); alone, the F-14's strike with its own.
       const seed = Math.floor(Math.random() * 1e9);
+      // Arcade alone: the harder rules; online, both players keep the shared ones.
+      const hard = !link && arcade();
+      const soloSpec: StrikeSpec = {
+        site: [0, 0, siteGround + scenario.site.aim],
+        siteRadius: scenario.site.radius,
+        spawnDistance: scenario.spawnDistance,
+        launchers: scenario.launchers?.map((at) => toLocal(site, at)),
+        waves: scenario.waves,
+        hitsAllowed: jet.hitsAllowed,
+        magazine: 0,
+        rounds: 0,
+        firstBreak: scenario.firstBreak,
+        breakTime: scenario.breakTime,
+      };
+      // Arcade: one missile a launcher and one spare; the gun does the rest.
+      const magazine = hard
+        ? Math.min(jet.missiles, (scenario.launchers?.length ?? 0) + 1)
+        : jet.missiles;
       const game = newStrike(
         link
           ? strikeSpec(scenario, siteGround)
-          : {
-              site: [0, 0, siteGround + scenario.site.aim],
-              siteRadius: scenario.site.radius,
-              spawnDistance: scenario.spawnDistance,
-              launchers: scenario.launchers?.map((at) => toLocal(site, at)),
-              waves: scenario.waves,
-              hitsAllowed: jet.hitsAllowed,
-              magazine: 0,
-              rounds: 0,
-              firstBreak: scenario.firstBreak,
-              breakTime: scenario.breakTime,
-            },
+          : hard
+            ? arcadeStrike(soloSpec)
+            : soloSpec,
         seed,
       );
       link?.started(seed, begun);
@@ -1258,7 +1325,9 @@ export function createAirplaneSim(
                 scenario.start.heading,
               )
             : null,
-        missiles: jet.missiles,
+        hard,
+        missiles: magazine,
+        magazine,
         rounds: jet.rounds,
         cooldown: 0,
         gunCooldown: 0,
@@ -1270,9 +1339,9 @@ export function createAirplaneSim(
           waveCount: scenario.waves.length,
           hitsLeft: game.spec.hitsAllowed,
           hitsAllowed: game.spec.hitsAllowed,
-          armourLeft: 0,
-          armour: 0,
-          hunters: false,
+          armourLeft: hard ? (game.spec.playerHits ?? 0) : 0,
+          armour: hard ? (game.spec.playerHits ?? 0) : 0,
+          hunters: hard,
           lostBy: null,
           kills: 0,
           total: totalThreats(game.spec),
@@ -1487,14 +1556,17 @@ export function createAirplaneSim(
             );
           }
           if (mission && steps && !current.crashed) {
-            // Hunters go for the partner's interceptor; without one, for the site.
+            // Hunters go for the partner's interceptor (without one, the site);
+            // in arcade alone, for the F-14 itself.
             mission.partner?.step(h);
             strikeEvents.push(
               ...stepStrike(
                 mission.game,
                 strikeGround,
                 h,
-                (link?.partner() ?? mission.partner?.state())?.position,
+                mission.hard
+                  ? sub(current.body.position, siteOffset(mission))
+                  : (link?.partner() ?? mission.partner?.state())?.position,
               ),
             );
           }
@@ -1537,18 +1609,28 @@ export function createAirplaneSim(
                 active.race.phase !== "countdown"
               ? [SMOKE_NOZZLE]
               : [];
+        // The jet at full throttle: thick smoke and afterburner flame as well,
+        // and the wings sweep back (forward again when it throttles back).
+        const jet = plane.frame.id === "jet";
+        const full = jet && !plane.crashed && pilot.throttle >= FULL_THROTTLE;
+        wingSweep = jet
+          ? wingSweep +
+            clamp((full ? 1 : 0) - wingSweep, -dt / SWEEP_TIME, dt / SWEEP_TIME)
+          : 0;
         if (smokeOn && !plane.crashed && plane.wheelsDown === 0) {
           const { position, orientation } = plane.body;
           const now = performance.now() / 1000;
-          nozzles.forEach((nozzle, i) =>
-            trails[i].emit(
-              now,
-              add(position, rotate(orientation, nozzle)),
-              env.wind,
-            ),
-          );
+          nozzles.forEach((nozzle, i) => {
+            const at = add(position, rotate(orientation, nozzle));
+            trails[i].emit(now, at, env.wind);
+            if (full) {
+              boostTrails[i].emit(now, at, env.wind);
+              flameTrails[i].emit(now, at, [0, 0, 0]);
+            }
+          });
+          if (!full) for (const t of [...boostTrails, ...flameTrails]) t.cut();
         } else {
-          for (const t of trails) t.cut();
+          for (const t of allTrails()) t.cut();
         }
         env.ground = ground;
         // The pointer never falls more than its reach behind (a stall, say, drops the nose away from it).
@@ -1585,7 +1667,7 @@ export function createAirplaneSim(
             chase.position[1] - north,
             chase.position[2],
           ];
-          for (const t of trails) t.shift(east, north);
+          for (const t of allTrails()) t.shift(east, north);
         }
       }
       present(flying ? dt : 0, alpha);
@@ -1617,7 +1699,7 @@ export function createAirplaneSim(
           wantSwitch = true;
         } else if (event.code === "KeyX") {
           smokeOn = !smokeOn;
-          for (const t of trails) t.cut();
+          for (const t of allTrails()) t.cut();
         } else if (event.code === "KeyC") {
           mode =
             CAMERA_MODES[

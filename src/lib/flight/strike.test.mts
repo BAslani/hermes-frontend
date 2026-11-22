@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  ARCADE_STRIKE,
   addMissile,
   addRound,
+  arcadeStrike,
   DECOY_REVEAL,
   fire,
   GUN,
@@ -682,4 +684,46 @@ test("launcher: one heavy-warhead missile (the F-14's) destroys it; the default 
   const standard = flyOne();
   assert.equal(standard.alive, true);
   assert.equal(standard.health, LAUNCHER.health - LAUNCHER.missile);
+});
+
+test("arcade strike: more, faster drones, a target that takes fewer hits, and hunters off the launchers", () => {
+  const base = launcherSpec();
+  const hard = arcadeStrike(base);
+  assert.equal(
+    hard.hitsAllowed,
+    Math.ceil(base.hitsAllowed * ARCADE_STRIKE.siteHits),
+  );
+  assert.equal(hard.playerHits, ARCADE_STRIKE.playerHits);
+  assert.ok(
+    hard.firstBreak < base.firstBreak && hard.breakTime < base.breakTime,
+  );
+  hard.waves.forEach((wave, w) => {
+    const attack = wave.groups.filter((g) => g.kind !== "hunter");
+    const hunters = wave.groups.filter((g) => g.kind === "hunter");
+    assert.equal(attack.length, base.waves[w].groups.length);
+    for (const [i, g] of attack.entries()) {
+      assert.equal(g.count, 3);
+      assert.ok(g.speed > base.waves[w].groups[i].speed);
+      assert.ok(g.interval < base.waves[w].groups[i].interval);
+    }
+    assert.equal(hunters.length, 1);
+    assert.equal(hunters[0].count, ARCADE_STRIKE.hunters + w);
+    assert.equal(typeof hunters[0].launcher, "number");
+  });
+  // The scenario's own spec is left alone.
+  assert.equal(base.waves[0].groups.length, 2);
+  assert.equal(base.waves[0].groups[0].count, 2);
+});
+
+test("arcade strike: hunters go for the aircraft, and three hits down it", () => {
+  const game = newStrike(arcadeStrike(launcherSpec()), 7);
+  // The aircraft circles over the first launcher, low, where the hunters take off.
+  const player: Vec3 = [4000, 0, 160];
+  const hits: number[] = [];
+  for (let t = 0; t < 240 && game.phase !== "lost"; t += 0.05)
+    for (const e of stepStrike(game, flat, 0.05, player))
+      if (e.kind === "player-hit") hits.push(e.hitsLeft);
+  assert.deepEqual(hits.slice(0, 3), [2, 1, 0]);
+  assert.equal(game.phase, "lost");
+  assert.equal(game.lostBy, "interceptor");
 });
